@@ -1,4 +1,4 @@
-"""Report plots for P2/P3 screening stages."""
+"""P2/P3/P5/P6/P7/P8/P9 阶段报告图生成。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from Spine_Sim_V2.plotting.styles import PlotStyle, apply_plot_style, load_plot_
 
 
 def plot_stage(stage_dir: str | Path, *, style: str = "report") -> dict[str, Path]:
-    """Generate default report figures for a saved stage."""
+    """从已保存阶段数据生成默认报告图。"""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -23,6 +23,7 @@ def plot_stage(stage_dir: str | Path, *, style: str = "report") -> dict[str, Pat
     data_dir = stage_path / "data"
     outdir = stage_path / "figures_report"
     outdir.mkdir(parents=True, exist_ok=True)
+    # 绘图层只读取数据；若统计表缺失，可从已保存 summary 重新分析，但不重跑仿真。
     if (data_dir / "final_summary.parquet").exists():
         from Spine_Sim_V2.analysis.final_mc import write_final_analysis
 
@@ -356,7 +357,7 @@ def _plot_p8(stats: Any, *, outdir: Path, plt: Any, plot_style: PlotStyle) -> di
 
 
 def _plot_p9(stats: Any, *, outdir: Path, plt: Any, plot_style: PlotStyle) -> dict[str, Path]:
-    """Generate P9 sensitivity plots from a saved sensitivity statistics table."""
+    """从已保存敏感性统计表生成 P9 图。"""
     require_columns(
         stats,
         ["sensitivity_name", "parameter_value", "metric_value"],

@@ -1,2 +1,1 @@
-"""Plotting tools that read saved data products."""
-
+"""只读取已保存数据产品的绘图工具。"""

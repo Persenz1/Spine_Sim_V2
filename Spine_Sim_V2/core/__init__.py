@@ -1,2 +1,1 @@
-"""Core types, units, constants, and geometry primitives."""
-
+"""核心数据类型、单位、常量与几何基础。"""

@@ -1,4 +1,4 @@
-"""Read and write project-level manifest.json files."""
+"""读写阶段级 ``manifest.json`` 元数据文件。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from Spine_Sim_V2.config.schema import SCHEMA_VERSION
 
 @dataclass(frozen=True)
 class Manifest:
-    """Project metadata saved with every simulation stage directory."""
+    """每个仿真/分析阶段目录中保存的可复现元数据。"""
 
     project_name: str
     created_time: str
@@ -33,17 +33,17 @@ class Manifest:
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-serializable manifest dictionary."""
+        """转换为可直接写入 JSON 的字典。"""
         return asdict(self)
 
 
 def utc_now_iso() -> str:
-    """Return the current UTC time as an ISO-8601 string."""
+    """返回 ISO-8601 格式的当前 UTC 时间。"""
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def get_code_version() -> str:
-    """Return the current git commit hash, or ``unknown`` outside a git repo."""
+    """返回当前 git commit hash；非 git 环境下返回 ``unknown``。"""
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -73,7 +73,7 @@ def create_manifest(
     code_version: str | None = None,
     created_time: str | None = None,
 ) -> Manifest:
-    """Create a manifest with all required fields present."""
+    """创建包含所有必需字段的 manifest 对象。"""
     return Manifest(
         project_name=project_name,
         created_time=created_time or utc_now_iso(),
@@ -93,9 +93,9 @@ def create_manifest(
 
 
 def write_manifest(manifest: Manifest | dict[str, Any], path: str | Path) -> Path:
-    """Write a manifest to ``path`` or ``path/manifest.json``.
+    """将 manifest 写到指定文件或目录下的 ``manifest.json``。
 
-    If ``path`` is a directory, the file name ``manifest.json`` is appended.
+    如果 ``path`` 是目录，会自动追加文件名 ``manifest.json``。
     """
     output_path = _manifest_file_path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -108,7 +108,7 @@ def write_manifest(manifest: Manifest | dict[str, Any], path: str | Path) -> Pat
 
 
 def read_manifest(path: str | Path) -> dict[str, Any]:
-    """Read a manifest from ``path`` or ``path/manifest.json``."""
+    """从指定文件或目录下的 ``manifest.json`` 读取 manifest。"""
     input_path = _manifest_file_path(path)
     return json.loads(input_path.read_text(encoding="utf-8"))
 

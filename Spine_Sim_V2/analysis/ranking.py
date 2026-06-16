@@ -1,4 +1,4 @@
-"""Candidate ranking and selection for P2/P3 screening stages."""
+"""P2/P3/P5 筛选阶段的候选评分、排序与入选规则。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from Spine_Sim_V2.io.parquet_io import read_parquet, write_parquet
 
 
 def analyze_stage(stage_dir: str | Path) -> tuple[Any, Any]:
-    """Recompute grouped statistics and rankings for a screening stage."""
+    """从已保存阶段数据重新计算分组统计和候选排名。"""
     stage_path = Path(stage_dir)
     summary_path = stage_path / "data" / "stage_summary.parquet"
     spines_path = stage_path / "data" / "stage_spines.parquet"
@@ -37,7 +37,7 @@ def _require_file(path: Path, label: str) -> None:
 
 
 def rank_candidates(grouped: Any, *, stage_kind: str) -> Any:
-    """Rank candidates for P2 or P3."""
+    """根据阶段类型调用对应的候选排序规则。"""
     if stage_kind.startswith("p2") or "P2" in stage_kind:
         return _rank_p2(grouped)
     if stage_kind.startswith("p3") or "P3" in stage_kind:
@@ -73,7 +73,7 @@ def infer_stage_kind(stage_dir: str | Path) -> str:
 
 
 def write_selection_reason(stage_dir: str | Path, rankings: Any, *, stage_kind: str) -> Path:
-    """Write a concise selection_reason.md report."""
+    """写出简要的 ``selection_reason.md`` 入选理由报告。"""
     path = Path(stage_dir) / "reports" / "selection_reason.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     selected = rankings.loc[rankings["selected"] == True].copy()  # noqa: E712
@@ -96,7 +96,7 @@ def write_selection_reason(stage_dir: str | Path, rankings: Any, *, stage_kind: 
 
 
 def write_stage_report(stage_dir: str | Path, grouped: Any, rankings: Any, *, stage_kind: str) -> Path:
-    """Write a concise stage_report.md from saved analysis products."""
+    """基于已保存分析产品写出简要 ``stage_report.md``。"""
     path = Path(stage_dir) / "reports" / "stage_report.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     selected = rankings.loc[rankings["selected"] == True].copy() if "selected" in rankings.columns else rankings.head(10).copy()  # noqa: E712
@@ -129,7 +129,7 @@ def write_stage_report(stage_dir: str | Path, grouped: Any, rankings: Any, *, st
 
 
 def write_selected_candidates(stage_dir: str | Path, rankings: Any, *, stage_kind: str) -> tuple[Path, Path]:
-    """Write selected candidate parameters to JSON and Parquet."""
+    """将入选候选的完整参数写为 JSON 和 Parquet。"""
     pd = _require_pandas()
     stage_path = Path(stage_dir)
     data_dir = stage_path / "data"
@@ -167,6 +167,7 @@ def _selected_record(row: dict[str, Any], *, stage_kind: str) -> dict[str, Any]:
 
 
 def _rank_p2(grouped: Any) -> Any:
+    """按 P2 权重和多样性约束排序柔顺 k-alpha 候选。"""
     pd = _require_pandas()
     scored = grouped.copy()
     scored["success_probability_score_row"] = score_high(scored["success_probability"])
@@ -205,6 +206,7 @@ def _rank_p2(grouped: Any) -> Any:
     )
     candidate = candidate.merge(robustness, on="candidate_id", how="left")
     candidate["surface_robustness_score"] = score_high(candidate["surface_robustness_value"])
+    # P2 不只看承载力，还显式加入成功率、效率、表面稳健性和失败/饱和风险。
     candidate["score_total"] = (
         0.30 * candidate["success_probability_score"]
         + 0.20 * candidate["force_score"]
@@ -223,6 +225,7 @@ def _rank_p2(grouped: Any) -> Any:
 
 
 def _rank_p3(grouped: Any) -> Any:
+    """按 P3 权重排序刚性安装角候选。"""
     scored = grouped.copy()
     scored["success_probability_score_row"] = score_high(scored["success_probability"])
     scored["force_score_row"] = score_high(scored["f_t_lim_n_mean"])
@@ -273,6 +276,7 @@ def _rank_p3(grouped: Any) -> Any:
 
 
 def _rank_p5(grouped: Any, *, stage_kind: str) -> Any:
+    """按 P5 阵列筛选权重排序候选。"""
     scored = grouped.copy()
     scored["success_probability_score_row"] = score_high(scored["success_probability"])
     scored["force_score_row"] = score_high(scored["f_t_lim_n_mean"])
@@ -343,6 +347,7 @@ def _rank_p5(grouped: Any, *, stage_kind: str) -> Any:
     candidate = candidate.merge(preload, on="candidate_id", how="left")
     candidate["surface_robustness_score"] = score_high(candidate["surface_robustness_value"])
     candidate["preload_robustness_score"] = score_high(candidate["preload_robustness_value"].fillna(candidate["success_probability"]))
+    # P5/P6 评分强调成功率和承载力，同时惩罚载荷集中、搜索失败和饱和风险。
     candidate["score_total"] = (
         0.25 * candidate["success_probability_score"]
         + 0.20 * candidate["force_score"]
@@ -368,6 +373,7 @@ def _rank_p5(grouped: Any, *, stage_kind: str) -> Any:
 
 
 def _format_ranking(candidate: Any, *, stage: str, selected_ids: set[str], reasons: dict[str, str]) -> Any:
+    """整理 rankings 表字段，并标记入选候选及其理由。"""
     rows = candidate.copy()
     rows.insert(0, "stage", stage)
     rows["selected"] = rows["candidate_id"].isin(selected_ids)
@@ -423,6 +429,7 @@ def _format_ranking(candidate: Any, *, stage: str, selected_ids: set[str], reaso
 
 
 def _select_p5a(candidate: Any) -> tuple[set[str], dict[str, str]]:
+    """P5a 粗筛保留刚性/柔顺各自前若干名。"""
     selected: list[str] = []
     reasons: dict[str, str] = {}
     for array_type in ("rigid", "compliant"):
@@ -436,6 +443,7 @@ def _select_p5a(candidate: Any) -> tuple[set[str], dict[str, str]]:
 
 
 def _select_p5b(candidate: Any) -> tuple[set[str], dict[str, str]]:
+    """P5b 按角色选择刚性 5 个和柔顺 5 个最终候选。"""
     selected: list[str] = []
     reasons: dict[str, str] = {}
     for array_type in ("rigid", "compliant"):
@@ -500,6 +508,7 @@ def _append_first_unused(ordered: Any, selected: list[str], reasons: dict[str, s
 
 
 def _select_p2(candidate: Any) -> tuple[set[str], dict[str, str]]:
+    """P2 保留 6-8 个兼顾角度和刚度多样性的候选。"""
     selected: list[str] = list(candidate.head(6)["candidate_id"])
     reasons = {candidate_id: "top-6 score" for candidate_id in selected}
 
@@ -538,6 +547,7 @@ def _select_p2(candidate: Any) -> tuple[set[str], dict[str, str]]:
 
 
 def _select_p3(candidate: Any) -> tuple[set[str], dict[str, str]]:
+    """P3 强制保留 60 度基准，并补充表现较好的其他角度。"""
     selected: list[str] = []
     reasons: dict[str, str] = {}
     alpha60 = candidate.loc[candidate["alpha_p_deg"] == 60]

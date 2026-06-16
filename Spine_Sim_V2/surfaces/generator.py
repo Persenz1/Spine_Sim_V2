@@ -1,4 +1,4 @@
-"""Synthetic proxy surface generation for surface banks."""
+"""surface bank 使用的合成代理表面生成器。"""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ PROBE_FILTER_VERSION = "fft_gaussian_probe_approx_v001"
 
 @dataclass(frozen=True)
 class GeneratedSurface:
-    """Generated raw and filtered height maps plus audit statistics."""
+    """生成的原始/滤波高度图及审查统计信息。"""
 
     surface_id: str
     surface_kind: str
@@ -38,13 +38,13 @@ def stable_surface_seed(
     index: int,
     base_seed: int,
 ) -> int:
-    """Create a reproducible 32-bit seed independent of Python hash randomization."""
+    """生成不受 Python hash 随机化影响的可复现 32 位种子。"""
     digest = sha256(f"{bank_id}:{surface_kind}:{index}:{base_seed}".encode("utf-8")).digest()
     return int.from_bytes(digest[:4], "little", signed=False)
 
 
 def make_surface_id(surface_kind: str, index: int) -> str:
-    """Return the canonical surface_id used for NPZ file names."""
+    """返回用于 NPZ 文件名的规范 ``surface_id``。"""
     return f"{surface_kind}_{index:06d}"
 
 
@@ -58,11 +58,10 @@ def generate_surface(
     size_y_mm: float = 40.0,
     tip_radius_mm: float = 0.05,
 ) -> GeneratedSurface:
-    """Generate one synthetic proxy surface.
+    """生成一张合成代理表面。
 
-    The generator is intentionally synthetic: it combines correlated roughness,
-    peaks, pits, step-like bands, and fine texture before normalizing to the
-    target proxy Rq.
+    生成器刻意保持为代理模型：先组合相关粗糙度、凸峰、凹坑、阶跃纹理和细纹理，
+    再归一化到目标代理 ``Rq``。这些参数不代表真实材料标定值。
     """
     if resolution_cells_per_mm <= 0:
         raise ValueError("resolution_cells_per_mm must be positive.")
@@ -78,6 +77,7 @@ def generate_surface(
     ny = max(2, int(round(size_y_mm * resolution_cells_per_mm)))
     rng = np.random.default_rng(seed)
 
+    # 多尺度地形只负责提供统计形貌；真实承载解释必须等后续接触/搜索模块完成。
     height_raw = _generate_multiscale_height(
         shape=(ny, nx),
         dx_mm=dx_mm,
@@ -119,12 +119,10 @@ def probe_filter(
     dx_mm: float,
     dy_mm: float,
 ) -> NDArray[np.float32]:
-    """Approximate finite-radius tip filtering.
+    """近似实现有限刺尖半径探针滤波。
 
-    This is a replaceable first-version approximation. It attenuates spatial
-    wavelengths smaller than the tip scale using an FFT Gaussian low-pass.
-    Later phases can replace this with a stricter morphological rolling-probe
-    implementation while preserving this function signature.
+    第一版用 FFT 高斯低通衰减小于刺尖尺度的空间波长。后续可以在保持函数签名
+    不变的前提下，替换为更严格的形态学滚动探针实现。
     """
     if tip_radius_mm <= 0:
         return np.asarray(height_raw, dtype=np.float32).copy()
@@ -144,7 +142,7 @@ def compute_surface_statistics(
     size_y_mm: float,
     tip_radius_mm: float,
 ) -> dict[str, object]:
-    """Compute surface bank audit statistics."""
+    """计算 surface bank 审查统计字段。"""
     raw = np.asarray(height_raw, dtype=float)
     eff = np.asarray(height_filtered, dtype=float)
     slope_deg = _slope_degrees(eff, dx_mm=dx_mm, dy_mm=dy_mm)
@@ -352,9 +350,10 @@ def _candidate_density_preload_free(
     size_x_mm: float,
     size_y_mm: float,
 ) -> float:
-    """Return a geometry-only local peak density used for bank audit.
+    """返回仅用于表面库审查的几何局部峰密度。
 
-    This is not an engagement decision and does not use W_i or phi_c,i.
+    这不是接合判定，也不使用 ``W_i`` 或 ``phi_c,i``；真实可接合区域仍要等
+    单 case 中局部预载求解完成后再判断。
     """
     z = np.asarray(height_mm, dtype=float)
     if z.shape[0] < 3 or z.shape[1] < 3:

@@ -1,4 +1,4 @@
-"""P0: surface bank generation and audit pipeline."""
+"""P0：surface bank 生成管线。"""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def run(
     base_seed: int = 20260616,
     overwrite: bool = False,
 ) -> SurfaceBank:
-    """Generate the Phase 0/2 surface bank data products."""
+    """生成 P0/P2 共用的 surface bank 数据产品。"""
     return create_surface_bank(
         bank_id=bank_id,
         surface_kinds=surfaces,

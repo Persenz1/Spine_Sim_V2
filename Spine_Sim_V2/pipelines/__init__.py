@@ -1,2 +1,1 @@
-"""Simulation pipeline entry points."""
-
+"""仿真阶段管线入口。"""

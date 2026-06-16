@@ -1,4 +1,4 @@
-"""Surface bank audit helpers."""
+"""surface bank 审查辅助函数。"""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ SURFACE_STATISTICS_REQUIRED_FIELDS: tuple[str, ...] = (
 
 
 def audit_surface_bank(surface_bank: str | Path | SurfaceBank) -> dict[str, Any]:
-    """Validate a surface bank and return audit details."""
+    """校验 surface bank 完整性并返回审查信息。"""
     bank = surface_bank if isinstance(surface_bank, SurfaceBank) else SurfaceBank.open(surface_bank)
     stats = bank.load_statistics()
     missing_fields = sorted(set(SURFACE_STATISTICS_REQUIRED_FIELDS) - set(stats.columns))
@@ -68,7 +68,7 @@ def sample_surface_ids_by_kind(
     sample_per_kind: int,
     seed: int = 20260616,
 ) -> dict[str, list[str]]:
-    """Return deterministic sample surface_ids grouped by kind."""
+    """按表面类别返回可复现的 ``surface_id`` 抽样结果。"""
     if sample_per_kind <= 0:
         raise ValueError("sample_per_kind must be positive.")
     bank = surface_bank if isinstance(surface_bank, SurfaceBank) else SurfaceBank.open(surface_bank)

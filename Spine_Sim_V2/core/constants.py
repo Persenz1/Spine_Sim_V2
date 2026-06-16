@@ -1,4 +1,4 @@
-"""Project-wide constants."""
+"""工程级通用单位常量。"""
 
 from __future__ import annotations
 
@@ -7,4 +7,3 @@ FORCE_UNIT = "N"
 ANGLE_IO_UNIT = "deg"
 SPRING_INPUT_UNIT = "N/m"
 SPRING_INTERNAL_UNIT = "N/mm"
-

@@ -1,4 +1,4 @@
-"""P6: final 3D Monte Carlo over selected P5b array candidates."""
+"""P6：对 P5b 最终候选执行正式 3D Monte Carlo。"""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ P6_RANDOM_SEED = 20260617
 
 @dataclass(frozen=True)
 class FinalCandidate:
-    """Candidate carried from P5b into final Monte Carlo."""
+    """从 P5b 传入 P6 的最终候选参数。"""
 
     candidate_id: str
     array_type: str
@@ -55,7 +55,7 @@ class FinalCandidate:
 
 @dataclass(frozen=True)
 class CaseTask:
-    """One final Monte Carlo case request."""
+    """一个 P6 Monte Carlo case 的执行请求。"""
 
     case_id: str
     candidate: FinalCandidate
@@ -78,7 +78,7 @@ def run(
     random_seed: int = P6_RANDOM_SEED,
     w_values: tuple[float, ...] = P6_W_TOTAL_N,
 ) -> Path:
-    """Run the P6 final Monte Carlo stage and save final_* data products."""
+    """运行 P6 最终 Monte Carlo，并保存 ``final_*`` 数据产品。"""
     pd = _require_pandas()
     stage_dir = Path(outdir)
     data_dir = stage_dir / "data"
@@ -95,6 +95,7 @@ def run(
         surface_list=surface_list,
         random_seed=random_seed,
     )
+    # P6 是正式统计源：候选 × 表面类别 × 预载 × surface_id 全组合展开。
     tasks = _iter_case_tasks(
         candidates=candidates,
         surface_bank_path=Path(surface_bank),
@@ -108,6 +109,7 @@ def run(
     case_count = 0
     failed_cases: list[str] = []
     try:
+        # 正式样本量较大，summary/spines 均流式写入，避免一次性占用大量内存。
         for summary_df, spines_df, failed_case_id in _run_tasks(tasks, workers=max(1, int(workers))):
             summary_writer.write(summary_df)
             spines_writer.write(spines_df)
@@ -163,7 +165,7 @@ def select_surface_ids(
     surface_list: str | Path | None = None,
     random_seed: int = P6_RANDOM_SEED,
 ) -> dict[str, list[str]]:
-    """Select surface ids for P6 using first_n, random_fixed, or explicit_list."""
+    """按 ``first_n``、``random_fixed`` 或 ``explicit_list`` 策略选择 P6 表面。"""
     if n_surfaces_per_kind <= 0:
         raise ValueError("n_surfaces_per_kind must be positive.")
     if surface_selection not in {"first_n", "random_fixed", "explicit_list"}:
@@ -190,6 +192,7 @@ def select_surface_ids(
 
 
 def _load_final_candidates(path: str | Path) -> list[FinalCandidate]:
+    """读取 P5b 产生的最终候选列表。"""
     records = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(records, list):
         raise ValueError(f"Selected candidate file must contain a list: {path}")
@@ -200,6 +203,7 @@ def _load_final_candidates(path: str | Path) -> list[FinalCandidate]:
 
 
 def _candidate_from_record(record: dict[str, Any]) -> FinalCandidate:
+    """从 JSON 记录恢复 P6 最终候选对象。"""
     return FinalCandidate(
         candidate_id=str(record["candidate_id"]),
         array_type=str(record["array_type"]),
@@ -223,6 +227,7 @@ def _iter_case_tasks(
     selected_surfaces: dict[str, list[str]],
     w_values: tuple[float, ...],
 ) -> Iterable[CaseTask]:
+    """展开 P6 的候选、表面和预载组合。"""
     for candidate in candidates:
         for surface_kind in P6_SURFACE_KINDS:
             for index, surface_id in enumerate(selected_surfaces[surface_kind]):
@@ -240,6 +245,7 @@ def _iter_case_tasks(
 
 
 def _run_tasks(tasks: Iterable[CaseTask], *, workers: int) -> Iterable[tuple[Any, Any, str | None]]:
+    """顺序或线程池执行 P6 case 任务。"""
     if workers <= 1:
         for task in tasks:
             yield _run_one_task(task)
@@ -265,6 +271,7 @@ def _run_tasks(tasks: Iterable[CaseTask], *, workers: int) -> Iterable[tuple[Any
 
 
 def _run_one_task(task: CaseTask) -> tuple[Any, Any, str | None]:
+    """执行单个 P6 case；异常 case 转成失败 summary，不静默丢弃。"""
     try:
         result = run_single_case(
             SingleCaseInput(
@@ -300,6 +307,7 @@ def _run_one_task(task: CaseTask) -> tuple[Any, Any, str | None]:
 
 
 def _failed_summary_record(task: CaseTask, exc: Exception) -> dict[str, Any]:
+    """为失败 case 构造保留字段完整性的 summary 行。"""
     record = {field.name: None for field in stage_summary_schema}
     candidate = task.candidate
     record.update(
@@ -359,6 +367,7 @@ def _failed_summary_record(task: CaseTask, exc: Exception) -> dict[str, Any]:
 
 
 def _write_sample_cases(stage_dir: Path) -> Path:
+    """从 P6 summary 中挑选代表性 case，供后续人工复查。"""
     from Spine_Sim_V2.io.parquet_io import read_parquet
 
     summary = read_parquet(stage_dir / "data" / "final_summary.parquet")
@@ -385,6 +394,7 @@ def _write_sample_cases(stage_dir: Path) -> Path:
 
 
 def _sample_record(reason: str, row: Any) -> dict[str, Any]:
+    """将一行 summary 转成 sample_cases.json 的精简记录。"""
     keys = [
         "case_id",
         "candidate_id",
@@ -411,6 +421,7 @@ def _sample_record(reason: str, row: Any) -> dict[str, Any]:
 
 
 def _write_final_report(stage_dir: Path) -> Path:
+    """写出 P6 最终排名简报。"""
     from Spine_Sim_V2.io.parquet_io import read_parquet
 
     rankings = read_parquet(stage_dir / "data" / "final_rankings.parquet")
@@ -449,6 +460,7 @@ def _write_final_report(stage_dir: Path) -> Path:
 
 
 def _load_explicit_surface_list(surface_list: str | Path | None, stats: Any) -> dict[str, list[str]]:
+    """读取用户显式指定的 surface_id 列表，并按表面类别归组。"""
     if surface_list is None:
         raise ValueError("surface_selection=explicit_list requires --surface-list.")
     path = Path(surface_list)
@@ -482,6 +494,7 @@ def _trim_surface_selection(
     available: dict[str, list[str]],
     n_surfaces_per_kind: int,
 ) -> dict[str, list[str]]:
+    """裁剪并校验每类表面的选择结果。"""
     trimmed: dict[str, list[str]] = {}
     for kind, ids_available in available.items():
         ids = [str(item) for item in selected.get(kind, [])]
@@ -494,6 +507,7 @@ def _trim_surface_selection(
 
 
 def _require_enough_surfaces(kind: str, ids: list[str], n_surfaces_per_kind: int) -> None:
+    """确认某类表面数量满足 P6 要求。"""
     if len(ids) < n_surfaces_per_kind:
         raise ValueError(
             f"Surface bank has {len(ids)} {kind!r} surfaces, but {n_surfaces_per_kind} are required."
@@ -501,6 +515,7 @@ def _require_enough_surfaces(kind: str, ids: list[str], n_surfaces_per_kind: int
 
 
 def _case_id(candidate_id: str, w_total_n: float, surface_id: str) -> str:
+    """生成 P6 case_id。"""
     return f"p6_{candidate_id}_W{str(w_total_n).replace('.', 'p')}_{surface_id}"
 
 
@@ -531,7 +546,7 @@ def _json_value(value: Any) -> Any:
 
 
 class _ParquetStreamWriter:
-    """Append pandas DataFrames as Parquet row groups with a fixed schema."""
+    """按固定 schema 将 DataFrame 追加写为 Parquet row group。"""
 
     def __init__(self, path: Path, *, schema: tuple[SchemaField, ...]) -> None:
         self.path = path

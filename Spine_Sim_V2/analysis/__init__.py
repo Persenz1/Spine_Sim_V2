@@ -1,2 +1,1 @@
-"""Statistical analysis, scoring, and ranking tools."""
-
+"""统计分析、评分与候选排序工具。"""

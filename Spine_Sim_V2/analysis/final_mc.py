@@ -1,4 +1,4 @@
-"""Final Monte Carlo statistics and post-processing for P6/P7/P8."""
+"""P6 最终 Monte Carlo 统计及 P7/P8 后处理。"""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ FINAL_GROUP_KEYS = [
 
 
 def write_final_analysis(stage_dir: str | Path) -> tuple[Any, Any, Any]:
-    """Write P6 final grouped statistics, rankings, convergence, and candidates."""
+    """写出 P6 分组统计、最终排名、收敛统计和候选清单。"""
     stage_path = Path(stage_dir)
     data_dir = stage_path / "data"
     summary_path = data_dir / "final_summary.parquet"
@@ -52,7 +52,7 @@ def _require_file(path: Path, label: str) -> None:
 
 
 def p6_schema_collection(grouped: Any, rankings: Any, convergence: Any) -> dict[str, tuple[SchemaField, ...]]:
-    """Return schema metadata for all P6 final data products."""
+    """返回 P6 所有 final 数据产品的 schema 元数据。"""
     return {
         "final_summary": stage_summary_schema,
         "final_spines": stage_spines_schema,
@@ -63,7 +63,7 @@ def p6_schema_collection(grouped: Any, rankings: Any, convergence: Any) -> dict[
 
 
 def dataframe_schema(df: Any) -> tuple[SchemaField, ...]:
-    """Infer a lightweight schema document for analysis output tables."""
+    """为分析输出表推断轻量 schema 文档。"""
     return tuple(
         SchemaField(
             name=str(column),
@@ -77,7 +77,8 @@ def dataframe_schema(df: Any) -> tuple[SchemaField, ...]:
 
 
 def final_grouped_statistics(summary: Any) -> Any:
-    """Aggregate P6 summary by the required final Monte Carlo keys."""
+    """按 P6 正式 Monte Carlo 维度聚合 summary。"""
+    # P6 保留 candidate × surface_kind × w_total_n 等键，便于后续表面泛化和预载效率分析。
     grouped = (
         summary.groupby(FINAL_GROUP_KEYS, dropna=False)
         .agg(
@@ -148,7 +149,7 @@ def final_grouped_statistics(summary: Any) -> Any:
 
 
 def rank_final_candidates(grouped: Any) -> Any:
-    """Rank final candidates from grouped P6 statistics."""
+    """基于 P6 分组统计对最终候选排序。"""
     scored = grouped.copy()
     scored["success_probability_score_row"] = score_high(scored["success_probability"])
     scored["force_score_row"] = score_high(scored["f_t_lim_n_mean"])
@@ -217,6 +218,7 @@ def rank_final_candidates(grouped: Any) -> Any:
     candidate["preload_robustness_score"] = score_high(
         candidate["preload_robustness_value"].fillna(candidate["success_probability"])
     )
+    # P6 沿用 P5 风格指标，用更大的 Monte Carlo 样本做最终比较，而非绝对墙面预测。
     candidate["score_total"] = (
         0.25 * candidate["success_probability_score"]
         + 0.20 * candidate["force_score"]
@@ -275,7 +277,7 @@ def rank_final_candidates(grouped: Any) -> Any:
 
 
 def convergence_statistics(summary: Any) -> Any:
-    """Compute convergence checkpoints as the number of surfaces per kind grows."""
+    """随着每类表面样本数增加，计算统计收敛检查点。"""
     pd = _require_pandas()
     if "surface_index_within_kind" not in summary.columns:
         summary = summary.copy()
@@ -309,7 +311,7 @@ def run_p7_surface_generalization(
     p6_dir: str | Path,
     outdir: str | Path = "outputs/P7_surface_generalization",
 ) -> Path:
-    """Generate P7 surface generalization products from saved P6 data only."""
+    """仅从已保存 P6 数据生成 P7 表面泛化结果，不重新仿真。"""
     stage_dir = Path(outdir)
     data_dir = stage_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -349,7 +351,7 @@ def run_p8_preload_efficiency(
     p6_dir: str | Path,
     outdir: str | Path = "outputs/P8_preload_efficiency",
 ) -> Path:
-    """Generate P8 preload efficiency products from saved P6 data only."""
+    """仅从已保存 P6 数据生成 P8 预载效率结果，不重新仿真。"""
     stage_dir = Path(outdir)
     data_dir = stage_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -378,7 +380,7 @@ def run_p8_preload_efficiency(
 
 
 def surface_generalization(summary: Any) -> tuple[Any, Any]:
-    """Compute P7 per-surface-kind generalization stats and rank shifts."""
+    """计算 P7 各表面类别下的泛化表现和排名漂移。"""
     stats = (
         summary.groupby(
             [
@@ -423,7 +425,7 @@ def surface_generalization(summary: Any) -> tuple[Any, Any]:
 
 
 def preload_efficiency(summary: Any) -> Any:
-    """Compute P8 preload response curves from P6 final summary rows."""
+    """从 P6 summary 计算 P8 预载响应曲线数据。"""
     return (
         summary.groupby(
             [

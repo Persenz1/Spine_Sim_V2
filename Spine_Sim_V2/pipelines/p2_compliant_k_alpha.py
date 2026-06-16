@@ -1,4 +1,4 @@
-"""P2: compliant single-spine stiffness-angle screening."""
+"""P2：柔顺单刺刚度-安装角联合初筛。"""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def run(
     w_values: tuple[float, ...] = P2_W_TOTAL_N,
     surface_kinds: tuple[str, ...] = P2_SURFACE_KINDS,
 ) -> Path:
-    """Run P2 compliant k-alpha screening."""
+    """运行 P2 柔顺单刺 ``spring_k_n_per_m x alpha_p_deg`` 初筛。"""
     return _run_screen(
         project_name=P2_PROJECT_NAME,
         stage_name="p2_compliant_k_alpha",
@@ -59,6 +59,7 @@ def _run_screen(
     w_values: tuple[float, ...],
     surface_kinds: tuple[str, ...],
 ) -> Path:
+    """运行 P2/P3 共用的单刺扫描管线。"""
     pd = _require_pandas()
     stage_dir = Path(outdir)
     for path in (stage_dir / "data", stage_dir / "sample_cases", stage_dir / "figures_report", stage_dir / "reports"):
@@ -69,6 +70,7 @@ def _run_screen(
     summary_records: list[dict[str, Any]] = []
     spine_records: list[dict[str, Any]] = []
     case_count = 0
+    # 阶段差异只体现在参数网格；每个 case 仍复用同一条物理求解链。
     for surface_kind in surface_kinds:
         for surface_id in selected_surfaces[surface_kind]:
             for alpha in alpha_values:
@@ -147,6 +149,7 @@ def _select_surface_ids(
     surface_kinds: tuple[str, ...],
     n_surfaces_per_kind: int,
 ) -> dict[str, list[str]]:
+    """按表面类别选取前 N 个 surface_id，保证调试和正式运行可复现。"""
     if n_surfaces_per_kind <= 0:
         raise ValueError("n_surfaces_per_kind must be positive.")
     stats = bank.load_statistics()
@@ -163,6 +166,7 @@ def _select_surface_ids(
 
 
 def _write_stage_report(stage_dir: Path, project_name: str) -> None:
+    """写出简要阶段报告；详细评分和入选理由由 analysis.ranking 生成。"""
     from Spine_Sim_V2.io.parquet_io import read_parquet
 
     summary = read_parquet(stage_dir / "data" / "stage_summary.parquet")

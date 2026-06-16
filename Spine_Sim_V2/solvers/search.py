@@ -1,4 +1,8 @@
-"""Finite tangential search with event refinement."""
+"""有限切向搜索和事件细化。
+
+粗步长只用来发现事件区间；穿入表面、首次接合和侧接触风险都要在区间内
+二分定位，避免用固定小步长直接决定仿真结果。
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ from Spine_Sim_V2.solvers.contact import interpolate_bilinear
 
 @dataclass(frozen=True)
 class SearchResult:
-    """Result of one spine's finite search."""
+    """单根刺有限行程搜索的结果。"""
 
     engaged: bool
     search_distance_mm: float | None
@@ -44,11 +48,10 @@ def search_first_engagement(
     max_refine_iter: int = 20,
     side_contact_risk_fn: SideContactRiskFn | None = None,
 ) -> SearchResult:
-    """Search +x for the first engageable point.
+    """沿 +x 方向搜索第一个可接合点。
 
-    Coarse samples only bracket events. Surface penetration and first
-    engagement are refined with bisection, so the returned event is not tied to
-    an arbitrary fixed small step.
+    粗采样只负责括住事件；表面穿入和首次接合都会二分细化，因此返回的事件
+    位置不依赖任意固定小步长。
     """
     if search_travel_mm < 0.0:
         raise ValueError("search_travel_mm must be non-negative.")
@@ -59,6 +62,7 @@ def search_first_engagement(
     if not np.isfinite(phi_c_deg):
         return SearchResult(False, None, None, None, None, "no_contact")
 
+    # 可接合阈值同时受局部预载推导出的 phi_c 和安装/摩擦钩取下限约束。
     threshold_deg = max(float(phi_c_deg), float(phi_hook_min_deg))
     step_mm = (
         float(search_ds_coarse)
@@ -148,6 +152,7 @@ def search_first_engagement(
             max_refine_iter=max_refine_iter,
         )
         earliest_non_engagement = _min_optional(penetration_s, side_contact_s)
+        # 若接合先于穿入/侧接触发生，则接受首次接合；否则优先返回更早的风险事件。
         if engagement_s is not None and (
             earliest_non_engagement is None or engagement_s <= earliest_non_engagement + refine_tol
         ):

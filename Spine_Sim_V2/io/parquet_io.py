@@ -1,4 +1,4 @@
-"""Parquet and preview CSV IO helpers."""
+"""Parquet 权威表和 CSV 预览表的读写辅助函数。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any
 
 
 def write_parquet(df: Any, path: str | Path) -> Path:
-    """Write a dataframe to Parquet using pyarrow."""
+    """使用 pyarrow 将 DataFrame 写为 Parquet。"""
     _require_parquet_dependencies()
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -16,16 +16,15 @@ def write_parquet(df: Any, path: str | Path) -> Path:
 
 
 def read_parquet(path: str | Path) -> Any:
-    """Read a Parquet file into a pandas dataframe."""
+    """读取 Parquet 文件为 pandas DataFrame。"""
     pd = _require_parquet_dependencies()
     return pd.read_parquet(Path(path), engine="pyarrow")
 
 
 def write_preview_csv(df: Any, path: str | Path, max_rows: int = 5000) -> Path:
-    """Write a small CSV preview of a dataframe.
+    """写出小规模 CSV 预览表。
 
-    CSV is a human preview format only. Parquet remains the authoritative table
-    format for simulation data products.
+    CSV 只供人工快速查看；仿真数据产品的权威表格式仍是 Parquet。
     """
     if max_rows <= 0:
         raise ValueError("max_rows must be positive.")

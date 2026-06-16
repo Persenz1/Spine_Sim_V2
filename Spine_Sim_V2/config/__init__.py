@@ -1,2 +1,1 @@
-"""Configuration defaults and schema helpers."""
-
+"""配置默认值与 schema 辅助项。"""

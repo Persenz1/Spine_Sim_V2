@@ -1,4 +1,4 @@
-"""Displacement-controlled loading and event-driven capacity limit."""
+"""切向位移控制加载与事件驱动承载上限求解。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from numpy.typing import NDArray
 
 @dataclass(frozen=True)
 class LoadingResult:
-    """Global loading result for one case."""
+    """单个 case 的整体加载结果。"""
 
     f_t_lim_n: float
     limit_displacement_mm: float | None
@@ -30,12 +30,11 @@ def run_loading_sequence(
     cap_n: NDArray[np.floating],
     k_tt_n_per_mm: float | None,
 ) -> LoadingResult:
-    """Run a simple displacement-controlled event sequence.
+    """执行简化的位移控制事件序列。
 
-    Engaged spines become active after their search distance and load as
-    k_share * (s - X_i). Failed spines are removed at their capacity event.
-    Rigid arrays use a numerical sharing stiffness because physical rigid
-    tangential stiffness is intentionally not modeled in Phase 3.
+    已接合刺在搜索距离 ``X_i`` 之后开始承载，载荷按
+    ``k_share * (s - X_i)`` 增长；达到容量的刺在事件点移除。刚性阵列使用
+    数值共享刚度，因为第一版不把刚性切向弹性作为真实物理参数标定。
     """
     engaged_arr = np.asarray(engaged, dtype=bool)
     search = np.asarray(search_distance_mm, dtype=float)
@@ -59,6 +58,7 @@ def run_loading_sequence(
     event_forces: list[float] = []
     event_tol = 1e-10
     while np.any(remaining):
+        # 每轮直接计算所有剩余刺的失效位移，整体极限载荷只从事件点产生。
         s_fail = np.full(n, np.inf, dtype=float)
         s_fail[remaining] = search[remaining] + caps[remaining] / k_share
         event_s = float(np.min(s_fail))
@@ -79,6 +79,7 @@ def run_loading_sequence(
 
         failing_now = np.where(remaining & (np.abs(s_fail - event_s) <= event_tol))[0]
         if len(failing_now) > 1:
+            # 同一位移多个刺同时失效，记录为潜在级联失效。
             cascade_failure = True
         for idx in sorted(int(item) for item in failing_now):
             if not failed[idx]:

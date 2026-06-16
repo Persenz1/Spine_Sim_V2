@@ -2,23 +2,37 @@
 
 新版爪刺阵列仿真工程，用于“推力预载下硬质粗糙表面爪刺阵列准静态仿真”。工程目标是趋势比较、机制解释和结构筛选；未经实验标定，不用于真实墙面绝对承载预测。
 
-## Model Boundary
+## 模型边界
 
 当前模型只面向硬质粗糙表面上的单爪或单爪单元。它不纳入完整对置爪夹持、整机姿态动力学、高速冲击、振动、惯性效应、表面刮削、颗粒脱落、粉化、磨损或刺尖磨钝；也不让微损伤直接提高承载力，不直接迁移文献材料参数，不把名义刺数当作有效刺数，不用 Ra 或 Rq 单独判断可啮合，不把自锁区数学发散解释成无限承载。
 
-单个 case 的物理顺序固定为：读取 surface bank，使用刺尖半径探针滤波后的有效高度图，计算初始间隙，由 `w_total_n` 反解局部预载 `W_i`，先得到 `W_i` 再计算临界接合角和可接合区域，沿切向有限行程搜索首次接合点，计算单刺承载上限，最后进行切向位移控制和事件驱动失效。
+单个 case 的物理顺序固定为：
 
-## Install
+```text
+读取 surface bank
+-> 使用刺尖半径探针滤波后的 height_filtered
+-> 计算初始间隙 g_i
+-> 由 w_total_n 反解局部预载 W_i
+-> 由 W_i 计算临界接合角 phi_c 和可接合区域
+-> 沿切向有限行程搜索首次接合点
+-> 计算单刺承载上限 F_t,i^cap
+-> 执行切向位移控制和事件驱动失效
+-> 输出 summary、spines、统计结果和可再生图片
+```
 
-Python 3.10+ is required.
+必须先求局部预载 `W_i`，再判断可接合区域。没有 `W_i` 时不允许提前计算接合成功。
+
+## 安装
+
+需要 Python 3.10 或更高版本。
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
 
-Quick checks:
+快速检查：
 
 ```bash
 python scripts/simulate.py --help
@@ -27,9 +41,9 @@ python scripts/plot_results.py --help
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q
 ```
 
-## Architecture
+## 工程架构
 
-The project uses a data-first, plot-decoupled workflow:
+工程采用数据优先、绘图解耦的三层流程：
 
 ```text
 simulate -> data
@@ -37,23 +51,31 @@ analyze  -> statistics / rankings
 plot     -> figures
 ```
 
-Simulation scripts save standardized data only. Analysis scripts recompute statistics, rankings, and reports from saved data. Plot scripts only read saved data and analysis outputs, so figures can be deleted and regenerated without rerunning simulation.
+`simulate` 只负责运行仿真并保存标准化数据。`analyze` 从已保存数据重新计算分组统计、评分、排名和候选清单。`plot` 只读取数据和分析结果生成图片，因此图片可以删除后重新生成，不需要重跑仿真。
 
-## Data Products
+## 数据产品
 
-Surface banks store long-lived terrain arrays:
+surface bank 长期保存表面数组：
 
-- `height_raw` and `height_filtered` are stored once per `surface_id` in NPZ files.
-- Case tables store `surface_bank_id` and `surface_id`; they do not duplicate terrain arrays.
-- P1 sample cases may save diagnostic arrays for manual inspection.
+- `height_raw`：原始代理高度图。
+- `height_filtered`：经过刺尖半径探针滤波后的有效高度图。
+- `surface_statistics.parquet`：每个 `surface_id` 的统计信息。
 
-Stage tables use Parquet as the authoritative format. CSV files are preview only. NPZ stores numerical arrays. `manifest.json` records reproducibility metadata, parameter grids, expected/completed case counts, and failures. `schema.json` records table fields, dtype, units, nullability, and descriptions.
+case 表只保存 `surface_bank_id` 和 `surface_id`，不重复保存大规模地形数组。P1 的 `sample_cases/*/case_arrays.npz` 是人工诊断副本，不作为大规模阶段的默认输出。
 
-`data/`, `outputs/`, Parquet, NPZ, and generated figure files are ignored by Git because they can be large and are reproducible from configuration and code. Curated paper figures may be copied manually into `docs/figures/`, which is explicitly allowed by `.gitignore`.
+主要文件格式：
 
-## Minimal Workflow
+- Parquet：权威表格格式，例如 `stage_summary.parquet`、`stage_spines.parquet`、`final_summary.parquet`。
+- CSV：人工预览表，只保存前若干行，不作为权威数据。
+- NPZ：数值数组，例如 surface bank 高度图和 P1 诊断数组。
+- `manifest.json`：记录项目名、代码版本、模型版本、surface bank、随机种子策略、参数网格、期望/完成 case 数和失败 case。
+- `schema.json`：记录表字段、dtype、单位、是否可空和说明。
 
-Generate a small surface bank:
+`data/`、`outputs/`、Parquet、NPZ 和生成图片默认不进入 Git，因为它们可能很大，并且可以由配置和代码复现。精选论文图片可手动复制到 `docs/figures/`。
+
+## 最小流程
+
+生成一个小型 surface bank：
 
 ```bash
 python scripts/simulate.py p0-surface-bank \
@@ -67,7 +89,7 @@ python scripts/simulate.py p0-surface-bank \
   --outdir data/surface_bank_debug
 ```
 
-Audit the surface bank:
+审查 surface bank：
 
 ```bash
 python scripts/plot_results.py surface-audit \
@@ -77,7 +99,7 @@ python scripts/plot_results.py surface-audit \
   --style report
 ```
 
-Run P1 single-case sanity:
+运行 P1 单算例闭环：
 
 ```bash
 python scripts/simulate.py p1-single-case \
@@ -90,7 +112,7 @@ python scripts/plot_results.py p1 \
   --style debug
 ```
 
-Run P2/P3 initial screens:
+运行 P2/P3 单刺初筛：
 
 ```bash
 python scripts/simulate.py p2-compliant-k-alpha \
@@ -111,7 +133,7 @@ python scripts/plot_results.py stage \
   --style report
 ```
 
-Run P5 array pitch screens:
+运行 P5 阵列间距筛选：
 
 ```bash
 python scripts/simulate.py p5a-array-coarse \
@@ -128,7 +150,7 @@ python scripts/simulate.py p5b-array-refine \
   --outdir outputs/P5b_array_pitch_refine_screen
 ```
 
-Run P6 final Monte Carlo smoke or formal interface:
+运行 P6 最终 Monte Carlo 的 smoke 或正式接口：
 
 ```bash
 python scripts/simulate.py p6-final-mc \
@@ -140,9 +162,11 @@ python scripts/simulate.py p6-final-mc \
   --workers 1
 ```
 
-For a formal run, use a larger bank such as `data/surface_bank_v001` and `--n-surfaces-per-kind 1000`. The same command supports later expansion to 1500 or 2000 surfaces per kind.
+正式运行可使用更大的表面库，例如 `data/surface_bank_v001` 和 `--n-surfaces-per-kind 1000`。同一接口也支持后续扩展到每类 1500 或 2000 个表面。
 
-Run P7/P8 post-processing from P6 data without rerunning simulation:
+## 后处理
+
+P7 和 P8 都从 P6 已保存数据后处理，不重新仿真：
 
 ```bash
 python scripts/analyze_results.py final \
@@ -157,7 +181,7 @@ python scripts/analyze_results.py p8-preload \
   --outdir outputs/P8_preload_efficiency
 ```
 
-Regenerate figures from saved data:
+重新生成图片：
 
 ```bash
 python scripts/plot_results.py final \
@@ -173,17 +197,17 @@ python scripts/plot_results.py p8 \
   --style paper
 ```
 
-Available plot styles are `debug`, `report`, and `paper`, configured in `plot_styles/`.
+可用绘图风格为 `debug`、`report` 和 `paper`，配置文件位于 `plot_styles/`。
 
-## Documentation
+## 文档
 
-- [Data Schema](docs/data_schema.md)
-- [Pipeline](docs/pipeline.md)
+- [数据 Schema](docs/data_schema.md)
+- [仿真流程](docs/pipeline.md)
 - [Surface Bank](docs/surface_bank.md)
-- [Scoring](docs/scoring.md)
-- [Plotting](docs/plotting.md)
+- [评分规则](docs/scoring.md)
+- [绘图系统](docs/plotting.md)
 
-## Package Layout
+## 目录结构
 
 ```text
 Spine_Sim_V2/

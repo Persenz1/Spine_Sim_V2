@@ -1,4 +1,4 @@
-"""Surface bank creation and lookup."""
+"""surface bank 的创建、读取和表面数组查询。"""
 
 from __future__ import annotations
 
@@ -25,14 +25,14 @@ from Spine_Sim_V2.surfaces.profiles import parse_surface_kinds
 
 @dataclass(frozen=True)
 class SurfaceBank:
-    """Reference to a surface bank directory and its persisted metadata."""
+    """对一个 surface bank 目录及其持久化元数据的引用。"""
 
     bank_id: str
     root: Path
 
     @classmethod
     def open(cls, root: str | Path) -> "SurfaceBank":
-        """Open an existing surface bank by directory."""
+        """按目录打开已有 surface bank。"""
         root_path = Path(root)
         manifest = read_manifest(root_path)
         bank_id = manifest.get("surface_bank_id") or root_path.name
@@ -40,24 +40,24 @@ class SurfaceBank:
 
     @property
     def surfaces_dir(self) -> Path:
-        """Directory containing per-surface NPZ arrays."""
+        """保存逐表面 NPZ 数组的目录。"""
         return self.root / "surfaces"
 
     @property
     def statistics_path(self) -> Path:
-        """Canonical surface statistics Parquet path."""
+        """表面统计 Parquet 的规范路径。"""
         return self.root / "surface_statistics.parquet"
 
     def load_statistics(self) -> Any:
-        """Load surface_statistics.parquet as a pandas DataFrame."""
+        """以 pandas DataFrame 读取 ``surface_statistics.parquet``。"""
         return _read_parquet_cached(str(self.statistics_path.resolve())).copy()
 
     def surface_path(self, surface_id: str) -> Path:
-        """Return the NPZ path for a surface_id."""
+        """返回某个 ``surface_id`` 对应的 NPZ 路径。"""
         return self.surfaces_dir / f"{surface_id}.npz"
 
     def load_surface_arrays(self, surface_id: str) -> dict[str, np.ndarray]:
-        """Load height_raw and height_filtered arrays for a surface_id."""
+        """读取某个表面的 ``height_raw`` 和 ``height_filtered`` 数组。"""
         path = self.surface_path(surface_id)
         if not path.exists():
             raise FileNotFoundError(f"Surface array file not found for {surface_id!r}: {path}")
@@ -72,7 +72,7 @@ class SurfaceBank:
         return arrays
 
     def get_surface_record(self, surface_id: str) -> dict[str, Any]:
-        """Return one statistics record for a surface_id."""
+        """返回某个 ``surface_id`` 的统计记录。"""
         stats = self.load_statistics()
         matches = stats.loc[stats["surface_id"] == surface_id]
         if matches.empty:
@@ -103,7 +103,7 @@ def create_surface_bank(
     base_seed: int = 20260616,
     overwrite: bool = False,
 ) -> SurfaceBank:
-    """Generate and persist a surface bank."""
+    """生成并持久化一个 surface bank。"""
     if n_per_kind <= 0:
         raise ValueError("n_per_kind must be positive.")
     kinds = parse_surface_kinds(surface_kinds)
@@ -122,6 +122,7 @@ def create_surface_bank(
             surface_id = make_surface_id(surface_kind, index)
             seed = stable_surface_seed(bank_id, surface_kind, index, base_seed)
             try:
+                # 表面数组只在 bank 中长期保存；后续 case 只记录 surface_id 引用。
                 generated = generate_surface(
                     surface_kind=surface_kind,
                     surface_id=surface_id,
@@ -206,7 +207,7 @@ def create_surface_bank(
 
 
 def _clear_generated_bank(root: Path) -> None:
-    """Remove generated bank products without touching unrelated parent data."""
+    """清理已生成的 bank 内容，但不越界触碰父目录。"""
     if root.name in {"", ".", "/"}:
         raise ValueError(f"Refusing to clear unsafe bank root: {root}")
     for child in root.iterdir():

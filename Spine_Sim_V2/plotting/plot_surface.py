@@ -1,4 +1,4 @@
-"""Surface bank audit plots."""
+"""surface bank 审查图生成。"""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def plot_surface_audit(
     seed: int = 20260616,
     style: str | Path = "report",
 ) -> dict[str, Path]:
-    """Generate the default Phase 2 surface bank audit figures."""
+    """从 surface bank 数据生成默认审查图。"""
     import matplotlib
 
     matplotlib.use("Agg")

@@ -1,4 +1,4 @@
-"""P1 single-case debug plotting."""
+"""P1 单 case 调试图生成。"""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def plot_p1_single_case_sanity(
     stage_dir: str | Path,
     style: str = "debug",
 ) -> dict[str, Path]:
-    """Generate P1 sanity debug figures from saved data products."""
+    """从已保存数据产品生成 P1 sanity 调试图。"""
     import matplotlib
 
     matplotlib.use("Agg")

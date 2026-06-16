@@ -1,4 +1,4 @@
-"""P5: array size and pitch screening pipelines."""
+"""P5：阵列规模与间距筛选管线。"""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ P5_SURFACE_KINDS = ("sandpaper", "concrete", "brick", "painted_wall")
 
 @dataclass(frozen=True)
 class ArrayCandidate:
-    """Full array candidate parameters."""
+    """完整阵列候选参数。"""
 
     candidate_id: str
     array_type: str
@@ -71,7 +71,7 @@ def run_p5a(
     max_p2_selected: int = 6,
     max_p3_selected: int = 2,
 ) -> Path:
-    """Run P5a coarse array pitch screen."""
+    """运行 P5a 阵列规模与间距粗筛。"""
     base_candidates = _build_p5a_candidates(
         p2_selected=p2_selected,
         p3_selected=p3_selected,
@@ -101,7 +101,7 @@ def run_p5b(
     outdir: str | Path = "outputs/P5b_array_pitch_refine_screen",
     w_values: tuple[float, ...] = P5_W_TOTAL_N,
 ) -> Path:
-    """Run P5b refine screen on P5a selected candidates."""
+    """基于 P5a 入围候选运行 P5b 复筛。"""
     candidates = [
         _candidate_from_record(record)
         for record in _load_selected_records(p5a_selected)
@@ -118,7 +118,7 @@ def run_p5b(
 
 
 def run() -> None:
-    """Deprecated generic P5 entry point."""
+    """已废弃的 P5 通用入口；请使用 ``run_p5a`` 或 ``run_p5b``。"""
     raise NotImplementedError("Use run_p5a or run_p5b.")
 
 
@@ -132,6 +132,7 @@ def _run_p5_stage(
     w_values: tuple[float, ...],
     outdir: str | Path,
 ) -> Path:
+    """运行 P5a/P5b 共用的大规模阵列筛选流程。"""
     pd = _require_pandas()
     stage_dir = Path(outdir)
     data_dir = stage_dir / "data"
@@ -144,6 +145,7 @@ def _run_p5_stage(
     preview_rows: list[dict[str, Any]] = []
     case_count = 0
     try:
+        # P5 case 数可能很大，summary/spines 采用流式 Parquet 写入，避免全量驻留内存。
         for candidate in candidates:
             for surface_kind in P5_SURFACE_KINDS:
                 for surface_id in selected_surfaces[surface_kind]:
@@ -219,6 +221,7 @@ def _build_p5a_candidates(
     max_p2_selected: int,
     max_p3_selected: int,
 ) -> list[ArrayCandidate]:
+    """把 P2/P3 入围单刺候选扩展成 P5a 阵列几何候选。"""
     p2_records = _load_selected_records(p2_selected)[:max_p2_selected]
     p3_records = _load_selected_records(p3_selected)[:max_p3_selected]
     candidates: list[ArrayCandidate] = []
@@ -261,6 +264,7 @@ def _geometry_grid(
     pitch_t_values: tuple[float, ...],
     pitch_l_values: tuple[float, ...],
 ) -> Iterable[dict[str, Any]]:
+    """枚举 P5 的 rows/cols/pitch_t/pitch_l 几何网格。"""
     for row_count in rows:
         for col_count in cols:
             for pitch_t_mm in pitch_t_values:
@@ -274,6 +278,7 @@ def _geometry_grid(
 
 
 def _candidate_from_record(record: dict[str, Any]) -> ArrayCandidate:
+    """从 selected_candidates 记录恢复阵列候选对象。"""
     return ArrayCandidate(
         candidate_id=str(record["candidate_id"]),
         array_type=str(record["array_type"]),
@@ -291,6 +296,7 @@ def _candidate_from_record(record: dict[str, Any]) -> ArrayCandidate:
 
 
 def _load_selected_records(path: str | Path) -> list[dict[str, Any]]:
+    """读取上游阶段的 selected_candidates.json。"""
     records = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(records, list):
         raise ValueError(f"Selected candidate file must contain a list: {path}")
@@ -302,6 +308,7 @@ def _select_surface_ids(
     surface_kinds: tuple[str, ...],
     n_surfaces_per_kind: int,
 ) -> dict[str, list[str]]:
+    """按表面类别选取固定数量的 surface_id。"""
     if n_surfaces_per_kind <= 0:
         raise ValueError("n_surfaces_per_kind must be positive.")
     stats = bank.load_statistics()
@@ -318,10 +325,12 @@ def _select_surface_ids(
 
 
 def _case_id(stage_name: str, candidate_id: str, w_total_n: float, surface_id: str) -> str:
+    """生成阶段内可追溯的 case_id。"""
     return f"{stage_name}_{candidate_id}_W{str(w_total_n).replace('.', 'p')}_{surface_id}"
 
 
 def _write_stage_report(stage_dir: Path, project_name: str, rankings: Any) -> None:
+    """写出 P5 入围候选简报。"""
     lines = [
         f"# {project_name}",
         "",
@@ -339,7 +348,7 @@ def _write_stage_report(stage_dir: Path, project_name: str, rankings: Any) -> No
 
 
 class _ParquetStreamWriter:
-    """Append pandas DataFrames as Parquet row groups."""
+    """将 pandas DataFrame 追加写为 Parquet row group。"""
 
     def __init__(self, path: Path, *, schema: tuple[SchemaField, ...]) -> None:
         self.path = path

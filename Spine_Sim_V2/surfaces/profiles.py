@@ -1,8 +1,7 @@
-"""Proxy surface profile definitions.
+"""代理表面类别参数定义。
 
-The values here are synthetic proxy categories for screening and debugging.
-They are not material truth values and must not be used as calibrated wall
-parameters.
+这里的数值只用于筛选和调试的合成表面类别，不是真实材料参数，也不能作为
+墙面绝对承载预测的标定值。
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class SurfaceProfile:
-    """Statistical controls for one proxy surface family."""
+    """一类代理表面的统计生成控制参数。"""
 
     surface_kind: str
     rq_mm: float
@@ -49,12 +48,12 @@ DEFAULT_SURFACE_PROFILES: dict[str, SurfaceProfile] = {
 
 
 def list_builtin_profiles() -> list[str]:
-    """Return supported proxy surface kinds."""
+    """返回内置代理表面类别。"""
     return list(DEFAULT_SURFACE_PROFILES)
 
 
 def get_surface_profile(surface_kind: str) -> SurfaceProfile:
-    """Return a profile by kind, raising a clear error for unknown kinds."""
+    """按类别取表面参数；未知类别给出清晰错误。"""
     try:
         return DEFAULT_SURFACE_PROFILES[surface_kind]
     except KeyError as exc:
@@ -63,7 +62,7 @@ def get_surface_profile(surface_kind: str) -> SurfaceProfile:
 
 
 def parse_surface_kinds(value: str | list[str] | tuple[str, ...]) -> list[str]:
-    """Parse a comma-separated surface kind list and validate each entry."""
+    """解析逗号分隔的表面类别列表，并逐项校验。"""
     if isinstance(value, str):
         kinds = [item.strip() for item in value.split(",") if item.strip()]
     else:

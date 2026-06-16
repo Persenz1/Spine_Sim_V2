@@ -1,4 +1,8 @@
-"""Shared data types and data schemas for saved simulation products."""
+"""仿真工程共享数据类型与落盘表结构定义。
+
+本模块只定义可复用的数据容器和 schema 元数据，不承担物理计算。
+字段名保持英文和单位后缀，是为了让 Parquet/JSON 输出在脚本之间稳定传递。
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class CaseStatus:
-    """Standard status fields recorded for every simulated case."""
+    """每个仿真 case 都要记录的标准状态字段。"""
 
     case_status: str = "not_run"
     error_code: str | None = None
@@ -18,7 +22,7 @@ class CaseStatus:
 
 @dataclass(frozen=True)
 class SurfaceRef:
-    """Reference to a surface stored in a surface bank."""
+    """指向 surface bank 中某个表面的轻量引用。"""
 
     surface_bank_id: str
     surface_id: str
@@ -26,7 +30,7 @@ class SurfaceRef:
 
 @dataclass(frozen=True)
 class SingleCaseInput:
-    """Inputs for one Phase 3 single-case simulation."""
+    """单个 case 仿真所需的全部输入参数。"""
 
     surface_bank_path: str | Path
     surface_id: str
@@ -50,7 +54,7 @@ class SingleCaseInput:
 
 @dataclass(frozen=True)
 class StiffnessModel:
-    """Normal/tangential stiffness values for one array configuration."""
+    """某个阵列配置投影到法向/切向后的刚度参数。"""
 
     spring_k_n_per_m: float | None
     spring_k_n_per_mm: float | None
@@ -63,7 +67,7 @@ class StiffnessModel:
 
 @dataclass(frozen=True)
 class SingleCaseResult:
-    """Output tables and non-persisted diagnostics for a single case."""
+    """单 case 的输出表格和不强制落盘的诊断信息。"""
 
     case_summary: Any
     case_spines: Any
@@ -72,7 +76,7 @@ class SingleCaseResult:
 
 @dataclass(frozen=True)
 class SchemaField:
-    """A single field in a persisted table schema."""
+    """落盘表 schema 中的单个字段说明。"""
 
     name: str
     dtype: str
@@ -81,17 +85,17 @@ class SchemaField:
     description: str
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-serializable representation."""
+        """转换成可直接写入 JSON 的字典。"""
         return asdict(self)
 
 
 def schema_to_dicts(schema: tuple[SchemaField, ...]) -> list[dict[str, Any]]:
-    """Convert a schema tuple to JSON-serializable dictionaries."""
+    """把 schema 元组转换成 JSON 友好的字典列表。"""
     return [field_.to_dict() for field_ in schema]
 
 
 def schema_field_names(schema: tuple[SchemaField, ...]) -> set[str]:
-    """Return field names for quick validation checks."""
+    """提取字段名集合，用于快速校验输出表是否完整。"""
     return {field_.name for field_ in schema}
 
 

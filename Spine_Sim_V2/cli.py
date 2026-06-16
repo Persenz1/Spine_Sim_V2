@@ -1,4 +1,4 @@
-"""Command-line entry points for the spine array simulation project."""
+"""爪刺阵列仿真工程的命令行入口。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from Spine_Sim_V2 import __version__
 
 
 def build_parser(program: str | None = None) -> argparse.ArgumentParser:
-    """Build the top-level parser shared by console entry points."""
+    """构建控制台入口共享的顶层解析器。"""
     parser = argparse.ArgumentParser(
         prog=program,
         description=(
@@ -52,7 +52,7 @@ def build_parser(program: str | None = None) -> argparse.ArgumentParser:
 
 
 def build_simulate_parser(program: str | None = None) -> argparse.ArgumentParser:
-    """Build the parser for scripts/simulate.py."""
+    """构建 ``scripts/simulate.py`` 使用的解析器。"""
     parser = argparse.ArgumentParser(
         prog=program,
         description="Run simulation and data-generation pipelines.",
@@ -184,7 +184,7 @@ def build_simulate_parser(program: str | None = None) -> argparse.ArgumentParser
 
 
 def build_analyze_parser(program: str | None = None) -> argparse.ArgumentParser:
-    """Build the parser for scripts/analyze_results.py."""
+    """构建 ``scripts/analyze_results.py`` 使用的解析器。"""
     parser = argparse.ArgumentParser(
         prog=program,
         description="Analyze saved simulation data placeholders.",
@@ -240,7 +240,7 @@ def build_analyze_parser(program: str | None = None) -> argparse.ArgumentParser:
 
 
 def build_plot_parser(program: str | None = None) -> argparse.ArgumentParser:
-    """Build the parser for scripts/plot_results.py."""
+    """构建 ``scripts/plot_results.py`` 使用的解析器。"""
     parser = argparse.ArgumentParser(
         prog=program,
         description="Generate figures from saved data products.",
@@ -523,7 +523,7 @@ def _handle_plot_stage(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None, program: str | None = None) -> int:
-    """Run the command-line interface."""
+    """运行顶层命令行接口。"""
     parser = build_parser(program=program)
     return _run_parser(parser, argv)
 
@@ -532,7 +532,7 @@ def simulate_main(
     argv: Sequence[str] | None = None,
     program: str | None = None,
 ) -> int:
-    """Run the simulation script entry point."""
+    """运行仿真脚本入口。"""
     return _run_parser(build_simulate_parser(program=program), argv)
 
 
@@ -540,7 +540,7 @@ def analyze_main(
     argv: Sequence[str] | None = None,
     program: str | None = None,
 ) -> int:
-    """Run the analysis script entry point."""
+    """运行分析脚本入口。"""
     return _run_parser(build_analyze_parser(program=program), argv)
 
 
@@ -548,7 +548,7 @@ def plot_main(
     argv: Sequence[str] | None = None,
     program: str | None = None,
 ) -> int:
-    """Run the plotting script entry point."""
+    """运行绘图脚本入口。"""
     return _run_parser(build_plot_parser(program=program), argv)
 
 

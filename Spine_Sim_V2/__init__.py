@@ -1,7 +1,3 @@
-"""Spine_Sim_V2 package.
-
-Phase 0 provides the project skeleton and command-line entry points only.
-"""
+"""Spine_Sim_V2 爪刺阵列准静态仿真包。"""
 
 __version__ = "0.1.0"
-

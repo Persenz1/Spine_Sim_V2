@@ -1,2 +1,1 @@
-"""Input and output helpers for manifests, schemas, tables, and arrays."""
-
+"""manifest、schema、表格和数组的输入输出工具。"""

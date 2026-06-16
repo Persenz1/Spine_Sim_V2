@@ -1,4 +1,4 @@
-"""Q05-Q95 scoring helpers for screening stages."""
+"""筛选阶段使用的 Q05-Q95 归一化评分工具。"""
 
 from __future__ import annotations
 
@@ -6,16 +6,17 @@ from typing import Any
 
 
 def score_high(series: Any) -> Any:
-    """Q05-Q95 normalized score where larger is better."""
+    """越大越好的 Q05-Q95 归一化分数。"""
     return _score(series, larger_is_better=True)
 
 
 def score_low(series: Any) -> Any:
-    """Q05-Q95 normalized score where smaller is better."""
+    """越小越好的 Q05-Q95 归一化分数。"""
     return _score(series, larger_is_better=False)
 
 
 def _score(series: Any, *, larger_is_better: bool) -> Any:
+    """执行带裁剪的分位数归一化；退化分布统一给 0.5。"""
     q05 = series.quantile(0.05)
     q95 = series.quantile(0.95)
     if q95 == q05:

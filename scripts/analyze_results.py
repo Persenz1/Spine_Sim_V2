@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Run result analysis."""
+"""运行已保存仿真结果的分析流程。"""
 
 from __future__ import annotations
 

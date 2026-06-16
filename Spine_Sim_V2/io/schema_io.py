@@ -1,4 +1,4 @@
-"""Read and write schema.json files."""
+"""读写 ``schema.json`` 表结构说明文件。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def build_schema_document(
     *,
     data_schema_version: str = SCHEMA_VERSION,
 ) -> dict[str, Any]:
-    """Build the JSON document saved as schema.json."""
+    """构造要保存到 ``schema.json`` 的 JSON 文档。"""
     selected_schemas = schemas or SCHEMA_REGISTRY
     return {
         "data_schema_version": data_schema_version,
@@ -36,7 +36,7 @@ def write_schema(
     *,
     data_schema_version: str = SCHEMA_VERSION,
 ) -> Path:
-    """Write schema metadata to ``path`` or ``path/schema.json``."""
+    """将 schema 元数据写到指定文件或目录下的 ``schema.json``。"""
     output_path = _schema_file_path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = build_schema_document(
@@ -51,7 +51,7 @@ def write_schema(
 
 
 def read_schema(path: str | Path) -> dict[str, Any]:
-    """Read schema metadata from ``path`` or ``path/schema.json``."""
+    """从指定文件或目录下的 ``schema.json`` 读取 schema 元数据。"""
     input_path = _schema_file_path(path)
     return json.loads(input_path.read_text(encoding="utf-8"))
 

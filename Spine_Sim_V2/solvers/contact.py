@@ -1,4 +1,9 @@
-"""Array geometry, interpolation, and normal preload distribution solvers."""
+"""阵列几何、双线性插值与法向预载分配求解器。
+
+这里对应模型链条中的“接触与预载分配”环节。关键约束是先由
+``w_total_n`` 反解底板压入位移 ``delta_n_mm``，再回代得到每根刺的
+局部预载 ``W_i``；后续接合角和可接合区域都必须建立在这个结果之上。
+"""
 
 from __future__ import annotations
 
@@ -19,7 +24,7 @@ RIGID_NUMERICAL_PENALTY_N_PER_MM = 1.0e6
 
 @dataclass(frozen=True)
 class PreloadResult:
-    """Preload solution for an array."""
+    """阵列法向预载求解结果。"""
 
     delta_n_mm: float
     gap_mm: NDArray[np.float64]
@@ -33,7 +38,7 @@ class PreloadResult:
 
 
 def build_stiffness_model(case: SingleCaseInput) -> StiffnessModel:
-    """Build stiffness values for rigid or compliant arrays."""
+    """根据刚性/柔顺结构生成用于求解的刚度模型。"""
     array_type = case.array_type.lower()
     alpha_rad = deg_to_rad(case.alpha_p_deg)
     sin_alpha = sin(alpha_rad)
@@ -59,6 +64,8 @@ def build_stiffness_model(case: SingleCaseInput) -> StiffnessModel:
     if spring_k_n_per_mm is None or spring_k_n_per_mm <= 0.0:
         raise ValueError("Compliant spring_k_n_per_m must be positive.")
     cos_alpha = float(np.cos(alpha_rad))
+    # 柔顺阵列的一维轴向刚度需要按安装角投影到法向、切向和耦合项。
+    # 刚性阵列不在这里伪造真实弹簧刚度，避免把数值正则化误读为材料参数。
     return StiffnessModel(
         spring_k_n_per_m=float(case.spring_k_n_per_m),
         spring_k_n_per_mm=float(spring_k_n_per_mm),
@@ -80,7 +87,7 @@ def build_rectangular_array_geometry(
     dx_mm: float,
     dy_mm: float,
 ) -> list[dict[str, Any]]:
-    """Build centered rectangular array coordinates on a surface grid."""
+    """在表面窗口中心生成规则矩形阵列坐标。"""
     if rows <= 0 or cols <= 0:
         raise ValueError("rows and cols must be positive.")
     if pitch_t_mm <= 0.0 or pitch_l_mm <= 0.0:
@@ -113,7 +120,7 @@ def interpolate_bilinear(
     dx_mm: float,
     dy_mm: float,
 ) -> float:
-    """Bilinearly interpolate a regular height/slope grid."""
+    """对规则高度/坡度网格做双线性插值。"""
     arr = np.asarray(values, dtype=float)
     ny, nx = arr.shape
     gx = x_mm / dx_mm
@@ -148,7 +155,7 @@ def solve_preload_distribution(
     dy_mm: float,
     k_penalty_n_per_mm: float = RIGID_NUMERICAL_PENALTY_N_PER_MM,
 ) -> PreloadResult:
-    """Solve local preload W_i by monotonic root finding for delta_n."""
+    """通过单调求根反解 ``delta_n_mm``，并得到局部预载 ``W_i``。"""
     if case.w_total_n < 0.0:
         raise ValueError("w_total_n must be non-negative.")
     heights = np.asarray(
@@ -171,6 +178,7 @@ def solve_preload_distribution(
     if not np.any(finite_heights):
         raise ValueError("No spine projection lies inside the surface grid.")
 
+    # 初始间隙以阵列覆盖范围内最高投影点为零间隙基准。
     h_max = float(np.nanmax(heights))
     gaps = h_max - heights
     gaps[~finite_heights] = np.inf
@@ -190,6 +198,7 @@ def solve_preload_distribution(
         )
 
     if case.array_type.lower() == "rigid":
+        # 刚性阵列使用数值惩罚刚度分配接触力；该参数只服务互补接触近似。
         return _solve_rigid_preload(
             gaps=gaps,
             heights=heights,
@@ -222,6 +231,7 @@ def _solve_rigid_preload(
         compression[~np.isfinite(compression)] = 0.0
         return float(k_penalty_n_per_mm * np.sum(compression))
 
+    # total(delta_n) 单调递增，先括住目标预载，再用二分稳定求根。
     high = _bracket_monotonic_total(total, w_total_n, initial_high=float(np.nanmin(gaps)) + 1e-6)
     delta = _bisect_monotonic_total(total, target=w_total_n, low=0.0, high=high)
     compression = np.maximum(delta - gaps, 0.0)
@@ -257,6 +267,7 @@ def _solve_compliant_preload(
     def preload_at(delta_n_mm: float) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.bool_]]:
         c_i = np.maximum(delta_n_mm - gaps, 0.0)
         c_i[~np.isfinite(c_i)] = 0.0
+        # 文档中的柔顺近似：法向压入量先投影为轴向压缩，再受 4 mm 行程限制。
         u_ax = c_i * sin_alpha
         u_clamped = np.minimum(u_ax, AXIAL_STROKE_MAX_MM)
         preload = k_s * u_clamped * sin_alpha
@@ -266,6 +277,7 @@ def _solve_compliant_preload(
     max_preload, max_u_ax, max_saturated = preload_at(float(np.nanmax(gaps[np.isfinite(gaps)])) + AXIAL_STROKE_MAX_MM / sin_alpha + 1.0)
     normal_range_insufficient = float(np.sum(max_preload)) + 1e-9 < case.w_total_n
     if normal_range_insufficient:
+        # 行程用尽仍达不到总预载时，保留该 case，但标记为 warning，不做外推。
         warning_flags = tuple([*warning_flags, "normal_range_insufficient"])
         return PreloadResult(
             delta_n_mm=float(np.nanmax(gaps[np.isfinite(gaps)])) + AXIAL_STROKE_MAX_MM / sin_alpha,

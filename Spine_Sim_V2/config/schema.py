@@ -1,4 +1,4 @@
-"""Schema placeholders for saved simulation data."""
+"""仿真落盘数据的 schema 版本与必需字段配置。"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Plot style configuration loaded from plot_styles/*.yaml."""
+"""从 ``plot_styles/*.yaml`` 加载绘图风格配置。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ VALID_SAVE_FORMATS = {"png", "svg", "pdf"}
 
 @dataclass(frozen=True)
 class PlotStyle:
-    """Runtime plotting style options."""
+    """运行时绘图风格选项。"""
 
     name: str
     figure_size: tuple[float, float] = (6.4, 4.4)
@@ -27,16 +27,16 @@ class PlotStyle:
     save_format: str = "png"
 
     def path(self, outdir: str | Path, stem: str) -> Path:
-        """Return a figure path using the style's save format."""
+        """根据风格配置的保存格式生成图片路径。"""
         return Path(outdir) / f"{stem}.{self.save_format}"
 
     def scaled_size(self, *, width_scale: float = 1.0, height_scale: float = 1.0) -> tuple[float, float]:
-        """Return the style figure size scaled for panel layouts."""
+        """返回按面板布局缩放后的图片尺寸。"""
         return (self.figure_size[0] * width_scale, self.figure_size[1] * height_scale)
 
 
 def load_plot_style(style: str | Path = DEFAULT_STYLE) -> PlotStyle:
-    """Load a style by name or YAML path."""
+    """按风格名或 YAML 路径加载绘图风格。"""
     style_path = _resolve_style_path(style)
     data = _load_style_document(style_path)
     name = style_path.stem if style_path is not None else str(style)
@@ -63,7 +63,7 @@ def load_plot_style(style: str | Path = DEFAULT_STYLE) -> PlotStyle:
 
 
 def apply_plot_style(plt: Any, style: PlotStyle) -> None:
-    """Apply style values to matplotlib rcParams."""
+    """把风格参数应用到 matplotlib rcParams。"""
     plt.rcParams.update(
         {
             "font.family": style.font_family,
@@ -81,7 +81,7 @@ def apply_plot_style(plt: Any, style: PlotStyle) -> None:
 
 
 def require_columns(df: Any, columns: list[str] | tuple[str, ...], *, dataset_name: str) -> None:
-    """Raise a clear error when a dataframe is missing required columns."""
+    """当 DataFrame 缺少必需列时抛出清晰错误。"""
     missing = [column for column in columns if column not in df.columns]
     if missing:
         raise ValueError(f"{dataset_name} is missing required columns: {missing}")

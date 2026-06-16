@@ -1,4 +1,4 @@
-"""P3: rigid single-spine alpha screening."""
+"""P3：刚性单刺安装角验证。"""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def run(
     w_values: tuple[float, ...] = P2_W_TOTAL_N,
     surface_kinds: tuple[str, ...] = P2_SURFACE_KINDS,
 ) -> Path:
-    """Run P3 rigid alpha screening."""
+    """运行 P3 刚性单刺 ``alpha_p_deg`` 扫描。"""
     return _run_screen(
         project_name=P3_PROJECT_NAME,
         stage_name="p3_rigid_alpha",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Run simulation pipelines."""
+"""运行仿真与数据生成管线。"""
 
 from __future__ import annotations
 

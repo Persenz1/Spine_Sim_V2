@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Generate figures from saved data."""
+"""从已保存数据生成图片。"""
 
 from __future__ import annotations
 

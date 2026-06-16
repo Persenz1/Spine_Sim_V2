@@ -1,4 +1,8 @@
-"""P1: single case closed-loop simulation pipeline."""
+"""P1 单 case 闭环仿真管线。
+
+本模块是所有筛选阶段复用的物理主链条：从 surface bank 取表面，建立阵列，
+求解局部预载，搜索首次接合，计算单刺容量，最后做事件驱动切向加载。
+"""
 
 from __future__ import annotations
 
@@ -39,7 +43,7 @@ from Spine_Sim_V2.surfaces.bank import SurfaceBank
 
 
 def run_single_case(case: SingleCaseInput | None = None, **kwargs: Any) -> SingleCaseResult:
-    """Run one Phase 3 simulation case and return summary/spines tables."""
+    """运行一个完整仿真 case，并返回 summary/spines 两张表。"""
     pd = _require_pandas()
     if case is None:
         case = SingleCaseInput(**kwargs)
@@ -48,6 +52,7 @@ def run_single_case(case: SingleCaseInput | None = None, **kwargs: Any) -> Singl
     _validate_case(case)
 
     diagnostics: dict[str, Any] = {"solver_sequence": []}
+    # case 只保存 surface_id；实际高度图始终从 surface bank 读取，避免重复落盘。
     bank = SurfaceBank.open(case.surface_bank_path)
     surface_record = bank.get_surface_record(case.surface_id)
     arrays = bank.load_surface_arrays(case.surface_id)
@@ -68,6 +73,7 @@ def run_single_case(case: SingleCaseInput | None = None, **kwargs: Any) -> Singl
     )
     diagnostics["solver_sequence"].append("geometry_built")
 
+    # 强制先求解初始间隙和局部预载 W_i，后面的 phi_c 与可接合区域都依赖它。
     preload = solve_preload_distribution(
         case=case,
         stiffness=stiffness,
@@ -78,6 +84,7 @@ def run_single_case(case: SingleCaseInput | None = None, **kwargs: Any) -> Singl
     )
     diagnostics["solver_sequence"].extend(["gaps_computed", "preload_solved"])
 
+    # 第一版有效接触角来自 height_filtered 的局部坡度；接口保留给后续三维几何替换。
     phi_map_deg = effective_contact_angle_map_deg(
         height_filtered,
         dx_mm=dx_mm,
@@ -93,12 +100,14 @@ def run_single_case(case: SingleCaseInput | None = None, **kwargs: Any) -> Singl
     search_values: list[float] = []
     for idx, geom in enumerate(geometry):
         w_i = float(preload.preload_n[idx])
+        # 这里必须在 W_i 已知之后计算 phi_c；无接触刺返回 NaN 并跳过接合资格。
         phi_c_deg = compute_critical_angle_deg(
             preload_n=w_i,
             target_force_n=per_spine_trial_force_n,
             f_s=case.f_s,
         )
         if w_i <= 0.0:
+            # 无局部预载时不允许进入有效接合；仍调用搜索函数以保留一致状态输出。
             search_result = search_first_engagement(
                 phi_map_deg=phi_map_deg,
                 x0_mm=geom["x_mm"],
@@ -117,6 +126,7 @@ def run_single_case(case: SingleCaseInput | None = None, **kwargs: Any) -> Singl
             )
             side_risk = False
         else:
+            # 接触刺沿有限切向行程搜索第一个满足 phi_c/phi_hook 阈值的位置。
             search_result = search_first_engagement(
                 phi_map_deg=phi_map_deg,
                 x0_mm=geom["x_mm"],
@@ -199,6 +209,7 @@ def run_single_case(case: SingleCaseInput | None = None, **kwargs: Any) -> Singl
         < diagnostics["solver_sequence"].index("engagement_searched")
     )
 
+    # 切向承载上限来自事件点：每根已接合刺达到容量后移除并重新分担。
     loading = run_loading_sequence(
         engaged=np.asarray(engaged_values, dtype=bool),
         search_distance_mm=np.asarray(search_values, dtype=float),
@@ -241,7 +252,7 @@ def run_single_case(case: SingleCaseInput | None = None, **kwargs: Any) -> Singl
 
 
 def run(case: SingleCaseInput | None = None, **kwargs: Any) -> SingleCaseResult:
-    """Compatibility entry point for P1."""
+    """P1 的兼容入口，转发到 ``run_single_case``。"""
     return run_single_case(case, **kwargs)
 
 
@@ -252,10 +263,9 @@ def run_single_case_sanity(
     outdir: str | Path = "outputs/P1_single_case_sanity",
     compliant_spring_k_n_per_m: float = 330.0,
 ) -> Path:
-    """Run rigid and compliant P1 sanity cases and save data products.
+    """运行刚性和柔顺 P1 基准 case，并保存数据产品。
 
-    This stage saves tabular data and diagnostic arrays only. Figures are
-    generated later by ``plot_results.py p1``.
+    本阶段只保存表格和诊断数组；图片由后续 ``plot_results.py p1`` 从数据生成。
     """
     pd = _require_pandas()
     stage_dir = Path(outdir)
@@ -364,6 +374,7 @@ def _build_summary_record(
     loading: Any,
     phi_s_deg: float,
 ) -> dict[str, Any]:
+    """汇总单 case 指标，并写入与阶段表一致的字段。"""
     n_nom = case.rows * case.cols
     n_con = int(spines_df["contacted"].sum())
     n_eng = int(spines_df["engaged"].sum())
@@ -384,6 +395,7 @@ def _build_summary_record(
         w_total_n=case.w_total_n,
         normal_range_insufficient=normal_range_insufficient,
     )
+    # 文档要求同时保存“接合成功”和“有效承载成功”，评分默认看 load_success。
     engagement_success = n_eng > 0 and case_status != "failed"
     load_threshold = max(0.01, 0.05 * case.w_total_n)
     load_success = (
@@ -516,6 +528,7 @@ def _build_case_arrays(
     case: SingleCaseInput,
     result: SingleCaseResult,
 ) -> dict[str, Any]:
+    """构造 P1 诊断数组；大规模筛选阶段不保存这些二维副本。"""
     surface_record = bank.get_surface_record(case.surface_id)
     surface_arrays = bank.load_surface_arrays(case.surface_id)
     height_raw = surface_arrays["height_raw"].astype(np.float32)
@@ -532,6 +545,7 @@ def _build_case_arrays(
     phi_c_values = spines["phi_c_deg"].dropna().to_numpy(dtype=float)
     phi_hook_values = spines["phi_hook_min_deg"].dropna().to_numpy(dtype=float)
     if phi_c_values.size:
+        # P1 热区图只作人工诊断，真实接合仍以逐刺搜索结果为准。
         threshold = max(float(np.min(phi_c_values)), float(np.max(phi_hook_values)) if phi_hook_values.size else 0.0)
         engagement_candidate_mask = effective_contact_angle >= threshold
     else:

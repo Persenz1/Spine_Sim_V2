@@ -1,4 +1,4 @@
-"""Grouped statistics for screening stages."""
+"""筛选阶段的分组统计工具。"""
 
 from __future__ import annotations
 
@@ -12,8 +12,10 @@ GROUP_KEYS = ["candidate_id", "surface_kind", "w_total_n"]
 
 
 def grouped_statistics(summary: Any, *, stage_name: str) -> Any:
-    """Aggregate case summary by candidate, surface kind, and preload."""
+    """按候选、表面类别和预载分组聚合 case summary。"""
     pd = _require_pandas()
+    # 先按 candidate × surface_kind × w_total_n 聚合，后续评分再等权合并，
+    # 防止某类表面或某档预载样本更多时压过其他条件。
     grouped = (
         summary.groupby(GROUP_KEYS, dropna=False)
         .agg(
@@ -59,7 +61,7 @@ def grouped_statistics(summary: Any, *, stage_name: str) -> Any:
 
 
 def write_grouped_statistics_for_stage(stage_dir: str | Path) -> Any:
-    """Read a stage summary, write grouped statistics, and return them."""
+    """读取阶段 summary，写出分组统计表并返回结果。"""
     stage_path = Path(stage_dir)
     summary = read_parquet(stage_path / "data" / "stage_summary.parquet")
     stage_name = _stage_name_from_dir(stage_path)
