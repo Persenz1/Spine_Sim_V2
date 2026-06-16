@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "Spine_Sim_V2"
+version = "0.1.0"
+description = "Quasi-static spine array simulation skeleton for hard rough surfaces."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "pyarrow>=12.0",
+  "matplotlib>=3.6",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7",
+]
+
+[project.scripts]
+spine-sim = "Spine_Sim_V2.cli:main"
+spine-sim-simulate = "Spine_Sim_V2.cli:simulate_main"
+spine-sim-analyze = "Spine_Sim_V2.cli:analyze_main"
+spine-sim-plot = "Spine_Sim_V2.cli:plot_main"
+
+[tool.setuptools.packages.find]
+include = ["Spine_Sim_V2*"]

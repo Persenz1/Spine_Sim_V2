@@ -1,0 +1,232 @@
+"""Surface bank creation and lookup."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from Spine_Sim_V2.io.manifest import create_manifest, read_manifest, write_manifest
+from Spine_Sim_V2.io.npz_io import load_npz_arrays, save_npz_arrays
+from Spine_Sim_V2.io.parquet_io import read_parquet, write_parquet, write_preview_csv
+from Spine_Sim_V2.io.schema_io import write_schema
+from Spine_Sim_V2.surfaces.generator import (
+    PROBE_FILTER_VERSION,
+    SURFACE_GENERATOR_VERSION,
+    generate_surface,
+    make_surface_id,
+    stable_surface_seed,
+)
+from Spine_Sim_V2.surfaces.profiles import parse_surface_kinds
+
+
+@dataclass(frozen=True)
+class SurfaceBank:
+    """Reference to a surface bank directory and its persisted metadata."""
+
+    bank_id: str
+    root: Path
+
+    @classmethod
+    def open(cls, root: str | Path) -> "SurfaceBank":
+        """Open an existing surface bank by directory."""
+        root_path = Path(root)
+        manifest = read_manifest(root_path)
+        bank_id = manifest.get("surface_bank_id") or root_path.name
+        return cls(bank_id=str(bank_id), root=root_path)
+
+    @property
+    def surfaces_dir(self) -> Path:
+        """Directory containing per-surface NPZ arrays."""
+        return self.root / "surfaces"
+
+    @property
+    def statistics_path(self) -> Path:
+        """Canonical surface statistics Parquet path."""
+        return self.root / "surface_statistics.parquet"
+
+    def load_statistics(self) -> Any:
+        """Load surface_statistics.parquet as a pandas DataFrame."""
+        return _read_parquet_cached(str(self.statistics_path.resolve())).copy()
+
+    def surface_path(self, surface_id: str) -> Path:
+        """Return the NPZ path for a surface_id."""
+        return self.surfaces_dir / f"{surface_id}.npz"
+
+    def load_surface_arrays(self, surface_id: str) -> dict[str, np.ndarray]:
+        """Load height_raw and height_filtered arrays for a surface_id."""
+        path = self.surface_path(surface_id)
+        if not path.exists():
+            raise FileNotFoundError(f"Surface array file not found for {surface_id!r}: {path}")
+        arrays = {
+            key: value.copy()
+            for key, value in _load_npz_arrays_cached(str(path.resolve())).items()
+        }
+        expected = {"height_raw", "height_filtered"}
+        missing = expected - set(arrays)
+        if missing:
+            raise KeyError(f"Surface {surface_id!r} is missing arrays: {sorted(missing)}")
+        return arrays
+
+    def get_surface_record(self, surface_id: str) -> dict[str, Any]:
+        """Return one statistics record for a surface_id."""
+        stats = self.load_statistics()
+        matches = stats.loc[stats["surface_id"] == surface_id]
+        if matches.empty:
+            raise KeyError(f"surface_id {surface_id!r} is not present in {self.statistics_path}")
+        return matches.iloc[0].to_dict()
+
+
+@lru_cache(maxsize=16)
+def _read_parquet_cached(path: str) -> Any:
+    return read_parquet(path)
+
+
+@lru_cache(maxsize=128)
+def _load_npz_arrays_cached(path: str) -> dict[str, np.ndarray]:
+    return load_npz_arrays(path)
+
+
+def create_surface_bank(
+    *,
+    bank_id: str,
+    surface_kinds: str | list[str] | tuple[str, ...],
+    n_per_kind: int,
+    resolution_cells_per_mm: int = 5,
+    size_x_mm: float = 60.0,
+    size_y_mm: float = 40.0,
+    tip_radius_mm: float = 0.05,
+    outdir: str | Path | None = None,
+    base_seed: int = 20260616,
+    overwrite: bool = False,
+) -> SurfaceBank:
+    """Generate and persist a surface bank."""
+    if n_per_kind <= 0:
+        raise ValueError("n_per_kind must be positive.")
+    kinds = parse_surface_kinds(surface_kinds)
+    root = Path(outdir) if outdir is not None else Path("data") / bank_id
+    surfaces_dir = root / "surfaces"
+    if root.exists() and not overwrite:
+        raise FileExistsError(f"Surface bank already exists: {root}. Pass overwrite=True to replace it.")
+    if root.exists() and overwrite:
+        _clear_generated_bank(root)
+    surfaces_dir.mkdir(parents=True, exist_ok=True)
+
+    records: list[dict[str, object]] = []
+    failed_cases: list[str] = []
+    for surface_kind in kinds:
+        for index in range(n_per_kind):
+            surface_id = make_surface_id(surface_kind, index)
+            seed = stable_surface_seed(bank_id, surface_kind, index, base_seed)
+            try:
+                generated = generate_surface(
+                    surface_kind=surface_kind,
+                    surface_id=surface_id,
+                    seed=seed,
+                    resolution_cells_per_mm=resolution_cells_per_mm,
+                    size_x_mm=size_x_mm,
+                    size_y_mm=size_y_mm,
+                    tip_radius_mm=tip_radius_mm,
+                )
+                save_npz_arrays(
+                    surfaces_dir / f"{surface_id}.npz",
+                    height_raw=generated.height_raw.astype(np.float32),
+                    height_filtered=generated.height_filtered.astype(np.float32),
+                )
+                record = {
+                    "surface_bank_id": bank_id,
+                    "surface_id": surface_id,
+                    "surface_kind": surface_kind,
+                    "seed": seed,
+                    **generated.statistics,
+                }
+                records.append(record)
+            except Exception as exc:  # pragma: no cover - failure path kept for manifests.
+                failed_cases.append(surface_id)
+                records.append(
+                    {
+                        "surface_bank_id": bank_id,
+                        "surface_id": surface_id,
+                        "surface_kind": surface_kind,
+                        "seed": seed,
+                        "dx_mm": 1.0 / resolution_cells_per_mm,
+                        "dy_mm": 1.0 / resolution_cells_per_mm,
+                        "size_x_mm": size_x_mm,
+                        "size_y_mm": size_y_mm,
+                        "tip_radius_mm": tip_radius_mm,
+                        "rq_raw_mm": np.nan,
+                        "ra_raw_mm": np.nan,
+                        "hpv_raw_mm": np.nan,
+                        "rq_eff_mm": np.nan,
+                        "ra_eff_mm": np.nan,
+                        "hpv_eff_mm": np.nan,
+                        "slope_mean_deg": np.nan,
+                        "slope_p50_deg": np.nan,
+                        "slope_p95_deg": np.nan,
+                        "slope_max_deg": np.nan,
+                        "candidate_density_preload_free": np.nan,
+                        "valid": False,
+                        "reject_reason": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+
+    pd = _require_pandas_for_bank()
+    stats_df = pd.DataFrame.from_records(records)
+    write_parquet(stats_df, root / "surface_statistics.parquet")
+    write_preview_csv(stats_df, root / "surface_statistics_preview.csv")
+    write_schema(root)
+    manifest = create_manifest(
+        project_name="Spine_Sim_V2",
+        model_version="phase2_surface_bank",
+        surface_bank_id=bank_id,
+        surface_generator_version=SURFACE_GENERATOR_VERSION,
+        probe_filter_version=PROBE_FILTER_VERSION,
+        random_seed_policy=(
+            "stable sha256-derived per-surface seeds from bank_id, kind, index, and base_seed"
+        ),
+        parameter_grid={
+            "surface_kinds": kinds,
+            "n_per_kind": n_per_kind,
+            "resolution_cells_per_mm": resolution_cells_per_mm,
+            "size_x_mm": size_x_mm,
+            "size_y_mm": size_y_mm,
+            "tip_radius_mm": tip_radius_mm,
+            "base_seed": base_seed,
+        },
+        n_cases_expected=len(kinds) * n_per_kind,
+        n_cases_completed=int(stats_df["valid"].sum()),
+        failed_cases=failed_cases,
+        notes="Phase 2 proxy surface bank. Synthetic roughness parameters are not material truth.",
+    )
+    write_manifest(manifest, root)
+    return SurfaceBank(bank_id=bank_id, root=root)
+
+
+def _clear_generated_bank(root: Path) -> None:
+    """Remove generated bank products without touching unrelated parent data."""
+    if root.name in {"", ".", "/"}:
+        raise ValueError(f"Refusing to clear unsafe bank root: {root}")
+    for child in root.iterdir():
+        if child.is_dir():
+            for nested in child.rglob("*"):
+                if nested.is_file():
+                    nested.unlink()
+            for nested_dir in sorted((p for p in child.rglob("*") if p.is_dir()), reverse=True):
+                nested_dir.rmdir()
+            child.rmdir()
+        else:
+            child.unlink()
+
+
+def _require_pandas_for_bank() -> Any:
+    try:
+        import pandas as pd
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Surface bank generation requires pandas and pyarrow for Parquet output. "
+            "Install dependencies with `python3 -m pip install -e .`."
+        ) from exc
+    return pd

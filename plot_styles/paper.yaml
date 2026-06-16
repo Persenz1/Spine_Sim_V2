@@ -1,0 +1,9 @@
+figure_size: [6.8, 4.2]
+dpi: 300
+font_family: DejaVu Sans
+font_size: 9
+line_width: 1.2
+marker_size: 4
+colormap: magma
+language: en
+save_format: pdf
