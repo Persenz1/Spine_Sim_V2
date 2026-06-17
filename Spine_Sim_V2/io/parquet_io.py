@@ -17,10 +17,24 @@ def write_parquet(df: Any, path: str | Path) -> Path:
     return output_path
 
 
-def read_parquet(path: str | Path) -> Any:
+def read_parquet(path: str | Path, *, columns: Sequence[str] | None = None) -> Any:
     """读取 Parquet 文件为 pandas DataFrame。"""
     pd = _require_parquet_dependencies()
-    return pd.read_parquet(Path(path), engine="pyarrow")
+    return pd.read_parquet(Path(path), engine="pyarrow", columns=list(columns) if columns is not None else None)
+
+
+def parquet_columns(path: str | Path) -> list[str]:
+    _require_parquet_dependencies()
+    import pyarrow.parquet as pq
+
+    return list(pq.ParquetFile(Path(path)).schema.names)
+
+
+def parquet_row_count(path: str | Path) -> int:
+    _require_parquet_dependencies()
+    import pyarrow.parquet as pq
+
+    return int(pq.ParquetFile(Path(path)).metadata.num_rows)
 
 
 def write_preview_csv(df: Any, path: str | Path, max_rows: int = 5000) -> Path:

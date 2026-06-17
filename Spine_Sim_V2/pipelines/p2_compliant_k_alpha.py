@@ -213,14 +213,14 @@ def _select_surface_ids(
 
 def _write_stage_report(stage_dir: Path, project_name: str) -> None:
     """写出简要阶段报告；详细评分和入选理由由 analysis.ranking 生成。"""
-    from Spine_Sim_V2.io.parquet_io import read_parquet
+    from Spine_Sim_V2.io.parquet_io import parquet_row_count, read_parquet
 
-    summary = read_parquet(stage_dir / "data" / "stage_summary.parquet")
+    n_cases = parquet_row_count(stage_dir / "data" / "stage_summary.parquet")
     rankings = read_parquet(stage_dir / "data" / "stage_rankings.parquet")
     lines = [
         f"# {project_name}",
         "",
-        f"Cases completed: {len(summary)}",
+        f"Cases completed: {n_cases}",
         "",
         "## Selected Candidates",
         "",

@@ -7,10 +7,14 @@ from pathlib import Path
 from typing import Any
 
 from Spine_Sim_V2.analysis.scoring import score_high, score_low
-from Spine_Sim_V2.analysis.statistics import _distribution_aggs, _with_derived_columns
+from Spine_Sim_V2.analysis.statistics import (
+    DISTRIBUTION_COLUMNS,
+    aggregate_summary_statistics,
+)
+from Spine_Sim_V2.core.progress import ProgressReporter
 from Spine_Sim_V2.core.types import SchemaField, stage_spines_schema, stage_summary_schema
 from Spine_Sim_V2.io.manifest import create_manifest, write_manifest
-from Spine_Sim_V2.io.parquet_io import read_parquet, write_parquet
+from Spine_Sim_V2.io.parquet_io import parquet_columns, read_parquet, write_parquet
 from Spine_Sim_V2.io.schema_io import dataframe_schema, write_schema
 
 
@@ -26,6 +30,64 @@ FINAL_GROUP_KEYS = [
     "pitch_t_mm",
     "pitch_l_mm",
 ]
+FINAL_SUMMARY_ANALYSIS_COLUMNS = tuple(
+    dict.fromkeys(
+        [
+            *FINAL_GROUP_KEYS,
+            "case_id",
+            "load_success",
+            "engagement_success",
+            *DISTRIBUTION_COLUMNS,
+            "r_con",
+            "cascade_failure",
+            "normal_range_insufficient",
+            "surface_index_within_kind",
+            "surface_id",
+        ]
+    )
+)
+P7_SUMMARY_COLUMNS = tuple(
+    dict.fromkeys(
+        [
+            "surface_bank_id",
+            "candidate_id",
+            "array_type",
+            "surface_kind",
+            "rows",
+            "cols",
+            "pitch_t_mm",
+            "pitch_l_mm",
+            "alpha_p_deg",
+            "spring_k_n_per_m",
+            "case_id",
+            "load_success",
+            "f_t_lim_n",
+            "f_t_lim_over_w_total",
+            "eta_max",
+        ]
+    )
+)
+P8_SUMMARY_COLUMNS = tuple(
+    dict.fromkeys(
+        [
+            "surface_bank_id",
+            "candidate_id",
+            "array_type",
+            "w_total_n",
+            "rows",
+            "cols",
+            "pitch_t_mm",
+            "pitch_l_mm",
+            "alpha_p_deg",
+            "spring_k_n_per_m",
+            "case_id",
+            "load_success",
+            "f_t_lim_n",
+            "f_t_lim_over_w_total",
+            "eta_max",
+        ]
+    )
+)
 
 
 def write_final_analysis(stage_dir: str | Path) -> tuple[Any, Any, Any]:
@@ -34,22 +96,36 @@ def write_final_analysis(stage_dir: str | Path) -> tuple[Any, Any, Any]:
     data_dir = stage_path / "data"
     summary_path = data_dir / "final_summary.parquet"
     spines_path = data_dir / "final_spines.parquet"
-    _require_file(summary_path, "final summary")
-    _require_file(spines_path, "final spines")
-    summary = read_parquet(summary_path)
-    grouped = final_grouped_statistics(summary)
-    rankings = rank_final_candidates(grouped)
-    convergence = convergence_statistics(summary)
-    write_parquet(grouped, data_dir / "final_grouped_statistics.parquet")
-    write_parquet(rankings, data_dir / "final_rankings.parquet")
-    write_parquet(convergence, data_dir / "convergence_statistics.parquet")
-    _write_final_candidates_json(rankings, data_dir / "final_candidates.json")
+    with ProgressReporter(7, label=f"analysis {stage_path.name}") as progress:
+        _require_file(summary_path, "final summary")
+        _require_file(spines_path, "final spines")
+        progress.update()
+        summary = read_summary_columns(summary_path, FINAL_SUMMARY_ANALYSIS_COLUMNS)
+        progress.update()
+        grouped = final_grouped_statistics(summary)
+        progress.update()
+        rankings = rank_final_candidates(grouped)
+        progress.update()
+        convergence = convergence_statistics(summary)
+        del summary
+        progress.update()
+        write_parquet(grouped, data_dir / "final_grouped_statistics.parquet")
+        write_parquet(rankings, data_dir / "final_rankings.parquet")
+        write_parquet(convergence, data_dir / "convergence_statistics.parquet")
+        _write_final_candidates_json(rankings, data_dir / "final_candidates.json")
+        progress.update(2)
     return grouped, rankings, convergence
 
 
 def _require_file(path: Path, label: str) -> None:
     if not path.exists():
         raise FileNotFoundError(f"Missing {label} data product: {path}")
+
+
+def read_summary_columns(path: str | Path, columns: tuple[str, ...] | list[str]) -> Any:
+    available = set(parquet_columns(path))
+    selected = [column for column in columns if column in available]
+    return read_parquet(path, columns=selected)
 
 
 def p6_schema_collection(grouped: Any, rankings: Any, convergence: Any) -> dict[str, tuple[SchemaField, ...]]:
@@ -64,34 +140,11 @@ def p6_schema_collection(grouped: Any, rankings: Any, convergence: Any) -> dict[
 
 
 def final_grouped_statistics(summary: Any) -> Any:
-    """按 P6 正式 Monte Carlo 维度聚合 summary。"""
-    summary = _with_derived_columns(summary)
-    # P6 保留 candidate × surface_kind × w_total_n 等键，便于后续表面泛化和预载效率分析。
-    grouped = (
-        summary.groupby(FINAL_GROUP_KEYS, dropna=False)
-        .agg(
-            n_cases=("case_id", "count"),
-            n_success=("load_success", "sum"),
-            n_engagement_success=("engagement_success", "sum"),
-            success_probability=("load_success", "mean"),
-            engagement_success_probability=("engagement_success", "mean"),
-            **_distribution_aggs("f_t_lim_n"),
-            **_distribution_aggs("f_t_lim_over_w_total"),
-            **_distribution_aggs("eta_max"),
-            **_distribution_aggs("n_eff_kish"),
-            **_distribution_aggs("n_eng"),
-            **_distribution_aggs("r_uncontacted"),
-            **_distribution_aggs("r_fail_search"),
-            **_distribution_aggs("r_sat_n"),
-            **_distribution_aggs("r_sat_y"),
-            **_distribution_aggs("r_side_contact_risk"),
-            **_distribution_aggs("r_slip"),
-            **_distribution_aggs("r_overload"),
-            **_distribution_aggs("r_micro_damage_risk"),
-            cascade_failure_rate=("cascade_failure", "mean"),
-            normal_range_insufficient_rate=("normal_range_insufficient", "mean"),
-        )
-        .reset_index()
+    """Memory-conscious P6 summary aggregation used by final post-processing."""
+    grouped = aggregate_summary_statistics(
+        summary,
+        group_keys=FINAL_GROUP_KEYS,
+        include_success_rate=False,
     )
     grouped.insert(0, "stage", "p6_final_3d_monte_carlo")
     grouped.insert(
@@ -297,32 +350,38 @@ def run_p7_surface_generalization(
     data_dir.mkdir(parents=True, exist_ok=True)
     (stage_dir / "figures_report").mkdir(parents=True, exist_ok=True)
     (stage_dir / "reports").mkdir(parents=True, exist_ok=True)
-    summary = read_parquet(Path(p6_dir) / "data" / "final_summary.parquet")
-    stats, rankings = surface_generalization(summary)
-    write_parquet(stats, data_dir / "surface_generalization_statistics.parquet")
-    write_parquet(rankings, data_dir / "surface_generalization_rankings.parquet")
-    _write_p7_report(stage_dir, rankings)
-    write_schema(
-        stage_dir,
-        {
-            "surface_generalization_statistics": dataframe_schema(stats),
-            "surface_generalization_rankings": dataframe_schema(rankings),
-        },
-    )
-    write_manifest(
-        create_manifest(
-            project_name="Spine_Sim_V2",
-            model_version="P7_surface_generalization",
-            surface_bank_id=_first_or_none(summary, "surface_bank_id"),
-            random_seed_policy="No simulation; deterministic post-processing of P6 final_summary.parquet.",
-            parameter_grid={"p6_dir": str(p6_dir)},
-            n_cases_expected=int(len(summary)),
-            n_cases_completed=int(len(summary)),
-            failed_cases=[],
-            notes="P7 reads P6 data and does not rerun simulation.",
-        ),
-        stage_dir,
-    )
+    with ProgressReporter(5, label=f"analysis {stage_dir.name}") as progress:
+        summary = read_summary_columns(Path(p6_dir) / "data" / "final_summary.parquet", P7_SUMMARY_COLUMNS)
+        progress.update()
+        stats, rankings = surface_generalization(summary)
+        progress.update()
+        write_parquet(stats, data_dir / "surface_generalization_statistics.parquet")
+        write_parquet(rankings, data_dir / "surface_generalization_rankings.parquet")
+        _write_p7_report(stage_dir, rankings)
+        progress.update()
+        write_schema(
+            stage_dir,
+            {
+                "surface_generalization_statistics": dataframe_schema(stats),
+                "surface_generalization_rankings": dataframe_schema(rankings),
+            },
+        )
+        progress.update()
+        write_manifest(
+            create_manifest(
+                project_name="Spine_Sim_V2",
+                model_version="P7_surface_generalization",
+                surface_bank_id=_first_or_none(summary, "surface_bank_id"),
+                random_seed_policy="No simulation; deterministic post-processing of P6 final_summary.parquet.",
+                parameter_grid={"p6_dir": str(p6_dir)},
+                n_cases_expected=int(len(summary)),
+                n_cases_completed=int(len(summary)),
+                failed_cases=[],
+                notes="P7 reads P6 data and does not rerun simulation.",
+            ),
+            stage_dir,
+        )
+        progress.update()
     return stage_dir
 
 
@@ -337,25 +396,31 @@ def run_p8_preload_efficiency(
     data_dir.mkdir(parents=True, exist_ok=True)
     (stage_dir / "figures_report").mkdir(parents=True, exist_ok=True)
     (stage_dir / "reports").mkdir(parents=True, exist_ok=True)
-    summary = read_parquet(Path(p6_dir) / "data" / "final_summary.parquet")
-    stats = preload_efficiency(summary)
-    write_parquet(stats, data_dir / "preload_efficiency_statistics.parquet")
-    _write_p8_report(stage_dir, stats)
-    write_schema(stage_dir, {"preload_efficiency_statistics": dataframe_schema(stats)})
-    write_manifest(
-        create_manifest(
-            project_name="Spine_Sim_V2",
-            model_version="P8_preload_efficiency",
-            surface_bank_id=_first_or_none(summary, "surface_bank_id"),
-            random_seed_policy="No simulation; deterministic post-processing of P6 final_summary.parquet.",
-            parameter_grid={"p6_dir": str(p6_dir)},
-            n_cases_expected=int(len(summary)),
-            n_cases_completed=int(len(summary)),
-            failed_cases=[],
-            notes="P8 reads P6 data and does not rerun simulation.",
-        ),
-        stage_dir,
-    )
+    with ProgressReporter(5, label=f"analysis {stage_dir.name}") as progress:
+        summary = read_summary_columns(Path(p6_dir) / "data" / "final_summary.parquet", P8_SUMMARY_COLUMNS)
+        progress.update()
+        stats = preload_efficiency(summary)
+        progress.update()
+        write_parquet(stats, data_dir / "preload_efficiency_statistics.parquet")
+        _write_p8_report(stage_dir, stats)
+        progress.update()
+        write_schema(stage_dir, {"preload_efficiency_statistics": dataframe_schema(stats)})
+        progress.update()
+        write_manifest(
+            create_manifest(
+                project_name="Spine_Sim_V2",
+                model_version="P8_preload_efficiency",
+                surface_bank_id=_first_or_none(summary, "surface_bank_id"),
+                random_seed_policy="No simulation; deterministic post-processing of P6 final_summary.parquet.",
+                parameter_grid={"p6_dir": str(p6_dir)},
+                n_cases_expected=int(len(summary)),
+                n_cases_completed=int(len(summary)),
+                failed_cases=[],
+                notes="P8 reads P6 data and does not rerun simulation.",
+            ),
+            stage_dir,
+        )
+        progress.update()
     return stage_dir
 
 

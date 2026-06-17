@@ -257,7 +257,28 @@ def _write_sample_cases(stage_dir: Path) -> Path:
     """从 P6 summary 中挑选代表性 case，供后续人工复查。"""
     from Spine_Sim_V2.io.parquet_io import read_parquet
 
-    summary = read_parquet(stage_dir / "data" / "final_summary.parquet")
+    summary = read_parquet(
+        stage_dir / "data" / "final_summary.parquet",
+        columns=[
+            "case_id",
+            "candidate_id",
+            "array_type",
+            "surface_bank_id",
+            "surface_id",
+            "surface_kind",
+            "w_total_n",
+            "rows",
+            "cols",
+            "pitch_t_mm",
+            "pitch_l_mm",
+            "alpha_p_deg",
+            "spring_k_n_per_m",
+            "f_t_lim_n",
+            "load_success",
+            "failure_mode",
+            "eta_max",
+        ],
+    )
     records: list[dict[str, Any]] = []
     for candidate_id, subset in summary.groupby("candidate_id", dropna=False):
         success = subset.loc[subset["load_success"] == True]  # noqa: E712
@@ -309,14 +330,14 @@ def _sample_record(reason: str, row: Any) -> dict[str, Any]:
 
 def _write_final_report(stage_dir: Path) -> Path:
     """写出 P6 最终排名简报。"""
-    from Spine_Sim_V2.io.parquet_io import read_parquet
+    from Spine_Sim_V2.io.parquet_io import parquet_row_count, read_parquet
 
     rankings = read_parquet(stage_dir / "data" / "final_rankings.parquet")
-    summary = read_parquet(stage_dir / "data" / "final_summary.parquet")
+    n_cases = parquet_row_count(stage_dir / "data" / "final_summary.parquet")
     lines = [
         "# P6 Final 3D Monte Carlo Report",
         "",
-        f"Cases: {len(summary)}",
+        f"Cases: {n_cases}",
         "",
         "## Final Candidate Ranking",
         "",

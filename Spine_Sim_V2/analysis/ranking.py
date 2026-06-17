@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from Spine_Sim_V2.analysis.scoring import score_high, score_low
-from Spine_Sim_V2.analysis.statistics import grouped_statistics
+from Spine_Sim_V2.analysis.statistics import grouped_statistics, read_summary_for_statistics
+from Spine_Sim_V2.core.progress import ProgressReporter
 from Spine_Sim_V2.core.types import stage_spines_schema, stage_summary_schema
-from Spine_Sim_V2.io.parquet_io import read_parquet, write_parquet
+from Spine_Sim_V2.io.parquet_io import parquet_columns, read_parquet, write_parquet
 from Spine_Sim_V2.io.schema_io import dataframe_schema, write_schema
 
 
@@ -18,27 +19,37 @@ def analyze_stage(stage_dir: str | Path) -> tuple[Any, Any]:
     stage_path = Path(stage_dir)
     summary_path = stage_path / "data" / "stage_summary.parquet"
     spines_path = stage_path / "data" / "stage_spines.parquet"
-    _require_file(summary_path, "stage summary")
-    _require_file(spines_path, "stage spines")
-    summary = read_parquet(summary_path)
-    stage_kind = infer_stage_kind(stage_path)
-    grouped = grouped_statistics(summary, stage_name=stage_kind)
-    rankings = rank_candidates(grouped, stage_kind=stage_kind)
-    data_dir = stage_path / "data"
-    write_parquet(grouped, data_dir / "stage_grouped_statistics.parquet")
-    write_parquet(rankings, data_dir / "stage_rankings.parquet")
-    write_selection_reason(stage_path, rankings, stage_kind=stage_kind)
-    write_stage_report(stage_path, grouped, rankings, stage_kind=stage_kind)
-    write_selected_candidates(stage_path, rankings, stage_kind=stage_kind)
-    write_schema(
-        stage_path,
-        {
-            "stage_summary": stage_summary_schema,
-            "stage_spines": stage_spines_schema,
-            "stage_grouped_statistics": dataframe_schema(grouped),
-            "stage_rankings": dataframe_schema(rankings),
-        },
-    )
+    with ProgressReporter(8, label=f"analysis {stage_path.name}") as progress:
+        _require_file(summary_path, "stage summary")
+        _require_file(spines_path, "stage spines")
+        progress.update()
+        stage_kind = infer_stage_kind(stage_path)
+        progress.update()
+        summary = read_summary_for_statistics(summary_path)
+        progress.update()
+        grouped = grouped_statistics(summary, stage_name=stage_kind)
+        del summary
+        progress.update()
+        rankings = rank_candidates(grouped, stage_kind=stage_kind)
+        progress.update()
+        data_dir = stage_path / "data"
+        write_parquet(grouped, data_dir / "stage_grouped_statistics.parquet")
+        write_parquet(rankings, data_dir / "stage_rankings.parquet")
+        progress.update()
+        write_selection_reason(stage_path, rankings, stage_kind=stage_kind)
+        write_stage_report(stage_path, grouped, rankings, stage_kind=stage_kind)
+        write_selected_candidates(stage_path, rankings, stage_kind=stage_kind)
+        progress.update()
+        write_schema(
+            stage_path,
+            {
+                "stage_summary": stage_summary_schema,
+                "stage_spines": stage_spines_schema,
+                "stage_grouped_statistics": dataframe_schema(grouped),
+                "stage_rankings": dataframe_schema(rankings),
+            },
+        )
+        progress.update()
     return grouped, rankings
 
 
@@ -70,7 +81,11 @@ def infer_stage_kind(stage_dir: str | Path) -> str:
         return "p5b_array_pitch_refine"
     summary_path = Path(stage_dir) / "data" / "stage_summary.parquet"
     if summary_path.exists():
-        summary = read_parquet(summary_path)
+        available = set(parquet_columns(summary_path))
+        summary = read_parquet(
+            summary_path,
+            columns=[column for column in ("stage", "array_type") if column in available],
+        )
         stages = (
             set(str(item) for item in summary["stage"].dropna().unique())
             if "stage" in summary.columns
@@ -78,7 +93,7 @@ def infer_stage_kind(stage_dir: str | Path) -> str:
         )
         if any("p5" in stage for stage in stages):
             return "p5b_array_pitch_refine" if "P5b" in name else "p5a_array_pitch_coarse"
-        if set(summary["array_type"].dropna().unique()) == {"rigid"}:
+        if "array_type" in summary.columns and set(summary["array_type"].dropna().unique()) == {"rigid"}:
             return "p3_rigid_alpha"
     return "p2_compliant_k_alpha"
 

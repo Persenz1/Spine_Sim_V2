@@ -30,6 +30,12 @@ P7 reads P6 data and computes surface generalization; it does not rerun simulati
 
 P8 reads P6 data and computes preload efficiency; it does not rerun simulation.
 
+## Analysis Post-Processing
+
+P2/P3/P5/P6 still run analysis automatically after simulation rows are written. This automatic step writes grouped statistics, rankings, selected-candidate files, reports, and schema metadata.
+
+The analysis step has its own staged progress reporter. For large stages it reads only the summary columns required by the requested analysis, keeping large diagnostic or unused columns out of memory. Per-spine Parquet files are checked for presence but are not loaded by P2/P3/P5 ranking analysis.
+
 ## Single Case Solver Order
 
 The core case solver follows this order:
