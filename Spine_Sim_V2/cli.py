@@ -302,8 +302,11 @@ def build_plot_parser(program: str | None = None) -> argparse.ArgumentParser:
     surface_audit.add_argument(
         "--sample-per-kind",
         type=int,
-        default=8,
-        help="Number of surfaces to show per kind in gallery plots.",
+        default=2,
+        help=(
+            "Number of surfaces sampled per kind and stacked as rows in each "
+            "terrain/angle diagnostic map. Default: 2."
+        ),
     )
     surface_audit.add_argument("--outdir", required=True, help="Figure output directory.")
     surface_audit.add_argument("--seed", type=int, default=20260616, help="Audit sampling seed.")

@@ -39,7 +39,12 @@ Style fields include:
 
 ## Default Figures
 
-P0 produces surface galleries and audit distributions.
+P0 plotting produces paired terrain diagnostics and audit distributions. For each surface kind,
+`surface-audit` writes one raw and one probe-filtered height/contact-angle figure; by default
+each figure is a 2x2 layout with two sampled surfaces as rows, height maps on the left, and
+effective contact angle maps on the right.
+`slope_distribution_by_surface` summarizes each generated surface's 95th-percentile effective slope by kind.
+`candidate_density_distribution` summarizes the preload-free local-peak density used only for surface-bank audit.
 
 P1 produces height, angle, hotspot, search path, spine state, and load-displacement debug figures.
 

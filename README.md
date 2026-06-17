@@ -112,7 +112,7 @@ python scripts/simulate.py p0-surface-bank \
 ```bash
 python scripts/plot_results.py surface-audit \
   --surface-bank data/surface_bank_debug \
-  --sample-per-kind 3 \
+  --sample-per-kind 2 \
   --outdir outputs/P0_surface_audit \
   --style report
 ```

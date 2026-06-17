@@ -67,7 +67,7 @@ def test_surface_bank_audit_and_plots_stay_outside_bank(tmp_path):
     bank = create_surface_bank(
         bank_id="surface_bank_debug",
         surface_kinds="sandpaper,concrete",
-        n_per_kind=1,
+        n_per_kind=2,
         resolution_cells_per_mm=5,
         size_x_mm=4.0,
         size_y_mm=3.0,
@@ -81,12 +81,14 @@ def test_surface_bank_audit_and_plots_stay_outside_bank(tmp_path):
 
     outputs = plot_surface_audit(
         surface_bank=bank_dir,
-        sample_per_kind=1,
+        sample_per_kind=2,
         outdir=outdir,
     )
     expected_names = {
-        "surface_gallery.png",
-        "filtered_surface_gallery.png",
+        "concrete_filtered_height_angle.png",
+        "concrete_raw_height_angle.png",
+        "sandpaper_filtered_height_angle.png",
+        "sandpaper_raw_height_angle.png",
         "slope_distribution_by_surface.png",
         "candidate_density_distribution.png",
     }
