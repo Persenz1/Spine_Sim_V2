@@ -8,7 +8,9 @@ from typing import Any
 
 from Spine_Sim_V2.analysis.scoring import score_high, score_low
 from Spine_Sim_V2.analysis.statistics import grouped_statistics
+from Spine_Sim_V2.core.types import stage_spines_schema, stage_summary_schema
 from Spine_Sim_V2.io.parquet_io import read_parquet, write_parquet
+from Spine_Sim_V2.io.schema_io import dataframe_schema, write_schema
 
 
 def analyze_stage(stage_dir: str | Path) -> tuple[Any, Any]:
@@ -28,6 +30,15 @@ def analyze_stage(stage_dir: str | Path) -> tuple[Any, Any]:
     write_selection_reason(stage_path, rankings, stage_kind=stage_kind)
     write_stage_report(stage_path, grouped, rankings, stage_kind=stage_kind)
     write_selected_candidates(stage_path, rankings, stage_kind=stage_kind)
+    write_schema(
+        stage_path,
+        {
+            "stage_summary": stage_summary_schema,
+            "stage_spines": stage_spines_schema,
+            "stage_grouped_statistics": dataframe_schema(grouped),
+            "stage_rankings": dataframe_schema(rankings),
+        },
+    )
     return grouped, rankings
 
 
@@ -195,8 +206,12 @@ def _rank_p2(grouped: Any) -> Any:
             low_saturation_score=("low_saturation_score_row", "mean"),
             f_t_lim_n_mean=("f_t_lim_n_mean", "mean"),
             f_t_lim_over_w_total_mean=("f_t_lim_over_w_total_mean", "mean"),
+            r_uncontacted_mean=("r_uncontacted_mean", "mean"),
             r_fail_search_mean=("r_fail_search_mean", "mean"),
             r_sat_n_mean=("r_sat_n_mean", "mean"),
+            r_slip_mean=("r_slip_mean", "mean"),
+            r_overload_mean=("r_overload_mean", "mean"),
+            r_micro_damage_risk_mean=("r_micro_damage_risk_mean", "mean"),
             n_cases=("n_cases", "sum"),
             array_type=("array_type", "first"),
             spring_k_n_per_m=("spring_k_n_per_m", "first"),
@@ -250,7 +265,11 @@ def _rank_p3(grouped: Any) -> Any:
             low_search_failure_score=("low_search_failure_score_row", "mean"),
             f_t_lim_n_mean=("f_t_lim_n_mean", "mean"),
             f_t_lim_over_w_total_mean=("f_t_lim_over_w_total_mean", "mean"),
+            r_uncontacted_mean=("r_uncontacted_mean", "mean"),
             r_fail_search_mean=("r_fail_search_mean", "mean"),
+            r_slip_mean=("r_slip_mean", "mean"),
+            r_overload_mean=("r_overload_mean", "mean"),
+            r_micro_damage_risk_mean=("r_micro_damage_risk_mean", "mean"),
             n_cases=("n_cases", "sum"),
             array_type=("array_type", "first"),
             alpha_p_deg=("alpha_p_deg", "first"),
@@ -326,10 +345,14 @@ def _rank_p5(grouped: Any, *, stage_kind: str) -> Any:
             n_eff_kish_mean=("n_eff_kish_mean", "mean"),
             n_eng_mean=("n_eng_mean", "mean"),
             eta_max_mean=("eta_max_mean", "mean"),
+            r_uncontacted_mean=("r_uncontacted_mean", "mean"),
             r_fail_search_mean=("r_fail_search_mean", "mean"),
             r_sat_n_mean=("r_sat_n_mean", "mean"),
             r_sat_y_mean=("r_sat_y_mean", "mean"),
             r_side_contact_risk_mean=("r_side_contact_risk_mean", "mean"),
+            r_slip_mean=("r_slip_mean", "mean"),
+            r_overload_mean=("r_overload_mean", "mean"),
+            r_micro_damage_risk_mean=("r_micro_damage_risk_mean", "mean"),
             cascade_failure_rate=("cascade_failure_rate", "mean"),
             normal_range_insufficient_rate=("normal_range_insufficient_rate", "mean"),
             n_cases=("n_cases", "sum"),
@@ -417,10 +440,14 @@ def _format_ranking(candidate: Any, *, stage: str, selected_ids: set[str], reaso
         "n_eff_kish_mean",
         "n_eng_mean",
         "eta_max_mean",
+        "r_uncontacted_mean",
         "r_fail_search_mean",
         "r_sat_n_mean",
         "r_sat_y_mean",
         "r_side_contact_risk_mean",
+        "r_slip_mean",
+        "r_overload_mean",
+        "r_micro_damage_risk_mean",
         "cascade_failure_rate",
         "normal_range_insufficient_rate",
     ]

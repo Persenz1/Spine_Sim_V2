@@ -23,6 +23,7 @@ def run(
     alpha_values: tuple[float, ...] = P3_ALPHA_P_DEG,
     w_values: tuple[float, ...] = P2_W_TOTAL_N,
     surface_kinds: tuple[str, ...] = P2_SURFACE_KINDS,
+    workers: int | None = None,
 ) -> Path:
     """运行 P3 刚性单刺 ``alpha_p_deg`` 扫描。"""
     return _run_screen(
@@ -36,4 +37,5 @@ def run(
         alpha_values=alpha_values,
         w_values=w_values,
         surface_kinds=surface_kinds,
+        workers=workers,
     )

@@ -9,6 +9,8 @@ from typing import Any
 
 import numpy as np
 
+from Spine_Sim_V2.core.parallel import map_tasks_unordered, resolve_worker_count
+from Spine_Sim_V2.core.progress import ProgressReporter
 from Spine_Sim_V2.io.manifest import create_manifest, read_manifest, write_manifest
 from Spine_Sim_V2.io.npz_io import load_npz_arrays, save_npz_arrays
 from Spine_Sim_V2.io.parquet_io import read_parquet, write_parquet, write_preview_csv
@@ -21,6 +23,79 @@ from Spine_Sim_V2.surfaces.generator import (
     stable_surface_seed,
 )
 from Spine_Sim_V2.surfaces.profiles import parse_surface_kinds
+
+
+@dataclass(frozen=True)
+class _SurfaceGenJob:
+    """单张代理表面的生成任务（可跨进程 pickle）。"""
+
+    bank_id: str
+    surface_kind: str
+    index: int
+    seed: int
+    resolution_cells_per_mm: int
+    size_x_mm: float
+    size_y_mm: float
+    tip_radius_mm: float
+    surfaces_dir: str
+
+
+def _generate_surface_job(job: _SurfaceGenJob) -> tuple[dict[str, object], str | None]:
+    """在 worker 内生成一张表面、写出 NPZ，并只回传小体积的统计记录。
+
+    只回传统计 dict（不回传大数组），把数组直接落盘，避免跨进程 IPC 传输大数组
+    以及在主进程堆积内存。失败时回传带 ``valid=False`` 的记录，不静默丢弃。
+    """
+    surface_id = make_surface_id(job.surface_kind, job.index)
+    try:
+        generated = generate_surface(
+            surface_kind=job.surface_kind,
+            surface_id=surface_id,
+            seed=job.seed,
+            resolution_cells_per_mm=job.resolution_cells_per_mm,
+            size_x_mm=job.size_x_mm,
+            size_y_mm=job.size_y_mm,
+            tip_radius_mm=job.tip_radius_mm,
+        )
+        save_npz_arrays(
+            Path(job.surfaces_dir) / f"{surface_id}.npz",
+            height_raw=generated.height_raw.astype(np.float32),
+            height_filtered=generated.height_filtered.astype(np.float32),
+        )
+        record: dict[str, object] = {
+            "surface_bank_id": job.bank_id,
+            "surface_id": surface_id,
+            "surface_kind": job.surface_kind,
+            "seed": job.seed,
+            **generated.statistics,
+        }
+        return record, None
+    except Exception as exc:  # 失败表面保留为一行记录，标记 invalid，不静默跳过。
+        record = {
+            "surface_bank_id": job.bank_id,
+            "surface_id": surface_id,
+            "surface_kind": job.surface_kind,
+            "seed": job.seed,
+            "dx_mm": 1.0 / job.resolution_cells_per_mm,
+            "dy_mm": 1.0 / job.resolution_cells_per_mm,
+            "size_x_mm": job.size_x_mm,
+            "size_y_mm": job.size_y_mm,
+            "tip_radius_mm": job.tip_radius_mm,
+            "rq_raw_mm": np.nan,
+            "ra_raw_mm": np.nan,
+            "hpv_raw_mm": np.nan,
+            "rq_eff_mm": np.nan,
+            "ra_eff_mm": np.nan,
+            "hpv_eff_mm": np.nan,
+            "slope_mean_deg": np.nan,
+            "slope_p50_deg": np.nan,
+            "slope_p95_deg": np.nan,
+            "slope_max_deg": np.nan,
+            "candidate_density_preload_free": np.nan,
+            "valid": False,
+            "reject_reason": f"{type(exc).__name__}: {exc}",
+        }
+        return record, surface_id
 
 
 @dataclass(frozen=True)
@@ -102,8 +177,9 @@ def create_surface_bank(
     outdir: str | Path | None = None,
     base_seed: int = 20260616,
     overwrite: bool = False,
+    workers: int | None = None,
 ) -> SurfaceBank:
-    """生成并持久化一个 surface bank。"""
+    """生成并持久化一个 surface bank（按 CPU 线程数并行 + 进度条）。"""
     if n_per_kind <= 0:
         raise ValueError("n_per_kind must be positive.")
     kinds = parse_surface_kinds(surface_kinds)
@@ -115,64 +191,34 @@ def create_surface_bank(
         _clear_generated_bank(root)
     surfaces_dir.mkdir(parents=True, exist_ok=True)
 
+    jobs = [
+        _SurfaceGenJob(
+            bank_id=bank_id,
+            surface_kind=surface_kind,
+            index=index,
+            seed=stable_surface_seed(bank_id, surface_kind, index, base_seed),
+            resolution_cells_per_mm=resolution_cells_per_mm,
+            size_x_mm=size_x_mm,
+            size_y_mm=size_y_mm,
+            tip_radius_mm=tip_radius_mm,
+            surfaces_dir=str(surfaces_dir),
+        )
+        for surface_kind in kinds
+        for index in range(n_per_kind)
+    ]
+
     records: list[dict[str, object]] = []
     failed_cases: list[str] = []
-    for surface_kind in kinds:
-        for index in range(n_per_kind):
-            surface_id = make_surface_id(surface_kind, index)
-            seed = stable_surface_seed(bank_id, surface_kind, index, base_seed)
-            try:
-                # 表面数组只在 bank 中长期保存；后续 case 只记录 surface_id 引用。
-                generated = generate_surface(
-                    surface_kind=surface_kind,
-                    surface_id=surface_id,
-                    seed=seed,
-                    resolution_cells_per_mm=resolution_cells_per_mm,
-                    size_x_mm=size_x_mm,
-                    size_y_mm=size_y_mm,
-                    tip_radius_mm=tip_radius_mm,
-                )
-                save_npz_arrays(
-                    surfaces_dir / f"{surface_id}.npz",
-                    height_raw=generated.height_raw.astype(np.float32),
-                    height_filtered=generated.height_filtered.astype(np.float32),
-                )
-                record = {
-                    "surface_bank_id": bank_id,
-                    "surface_id": surface_id,
-                    "surface_kind": surface_kind,
-                    "seed": seed,
-                    **generated.statistics,
-                }
-                records.append(record)
-            except Exception as exc:  # pragma: no cover - failure path kept for manifests.
-                failed_cases.append(surface_id)
-                records.append(
-                    {
-                        "surface_bank_id": bank_id,
-                        "surface_id": surface_id,
-                        "surface_kind": surface_kind,
-                        "seed": seed,
-                        "dx_mm": 1.0 / resolution_cells_per_mm,
-                        "dy_mm": 1.0 / resolution_cells_per_mm,
-                        "size_x_mm": size_x_mm,
-                        "size_y_mm": size_y_mm,
-                        "tip_radius_mm": tip_radius_mm,
-                        "rq_raw_mm": np.nan,
-                        "ra_raw_mm": np.nan,
-                        "hpv_raw_mm": np.nan,
-                        "rq_eff_mm": np.nan,
-                        "ra_eff_mm": np.nan,
-                        "hpv_eff_mm": np.nan,
-                        "slope_mean_deg": np.nan,
-                        "slope_p50_deg": np.nan,
-                        "slope_p95_deg": np.nan,
-                        "slope_max_deg": np.nan,
-                        "candidate_density_preload_free": np.nan,
-                        "valid": False,
-                        "reject_reason": f"{type(exc).__name__}: {exc}",
-                    }
-                )
+    # 表面数组直接由 worker 落盘；主进程只收集小体积统计记录，内存占用恒定。
+    with ProgressReporter(len(jobs), label=f"surface_bank {bank_id}") as bar:
+        for record, failed_id in map_tasks_unordered(_generate_surface_job, jobs, workers=workers):
+            records.append(record)
+            if failed_id is not None:
+                failed_cases.append(failed_id)
+            bar.update()
+
+    # 完成顺序与 worker 无关，按 (kind, surface_id) 排序保证 statistics 表稳定可复现。
+    records.sort(key=lambda item: (str(item["surface_kind"]), str(item["surface_id"])))
 
     pd = _require_pandas_for_bank()
     stats_df = pd.DataFrame.from_records(records)
@@ -196,6 +242,7 @@ def create_surface_bank(
             "size_y_mm": size_y_mm,
             "tip_radius_mm": tip_radius_mm,
             "base_seed": base_seed,
+            "workers": resolve_worker_count(workers),
         },
         n_cases_expected=len(kinds) * n_per_kind,
         n_cases_completed=int(stats_df["valid"].sum()),

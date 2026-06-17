@@ -39,8 +39,13 @@ The core case solver follows this order:
 3. Interpolate spine heights and compute initial gaps.
 4. Solve local normal preload `W_i` from `w_total_n`.
 5. Compute critical engagement angles only after `W_i` exists.
+   `trial_force_n` is interpreted as a per-spine trial tangential force, so
+   lower-preload spines get a higher `phi_c` threshold instead of having the
+   criterion collapse through nominal-count averaging.
 6. Search finite tangential travel for the first engagement event.
 7. Compute per-spine capacity with a finite upper bound.
+   Capacity modes are `none`, `no_geometric_engagement`, `geom_friction`,
+   `strength`, and `self_lock_strength`.
 8. Run event-driven tangential loading and failure.
 9. Save summary and per-spine rows.
 

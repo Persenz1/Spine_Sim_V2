@@ -92,12 +92,17 @@ def run_single_case(case: SingleCaseInput | None = None, **kwargs: Any) -> Singl
     )
     phi_s_deg = phi_s_deg_from_friction(case.f_s)
     phi_hook_deg = phi_hook_min_deg(case.alpha_p_deg, phi_s_deg)
-    per_spine_trial_force_n = case.trial_force_n / max(case.rows * case.cols, 1)
+    # ``trial_force_n`` is the per-spine force demand in the phi_c formula.  It is
+    # intentionally not divided by n_nom; otherwise default arrays make phi_c
+    # collapse toward -phi_s and the W_i -> phi_c engagement path becomes inactive.
+    per_spine_trial_force_n = case.trial_force_n
 
     spine_records: list[dict[str, Any]] = []
     cap_values: list[float] = []
+    cap_mode_values: list[str | None] = []
     engaged_values: list[bool] = []
     search_values: list[float] = []
+    tip_area_mm2 = float(np.pi * max(case.tip_radius_mm, 1e-9) ** 2)
     for idx, geom in enumerate(geometry):
         w_i = float(preload.preload_n[idx])
         # 这里必须在 W_i 已知之后计算 phi_c；无接触刺返回 NaN 并跳过接合资格。
@@ -158,6 +163,7 @@ def run_single_case(case: SingleCaseInput | None = None, **kwargs: Any) -> Singl
 
         engaged_values.append(bool(search_result.engaged))
         cap_values.append(float(cap_result.cap_n))
+        cap_mode_values.append(cap_result.cap_mode)
         search_values.append(
             float(search_result.search_distance_mm)
             if search_result.search_distance_mm is not None
@@ -166,6 +172,12 @@ def run_single_case(case: SingleCaseInput | None = None, **kwargs: Any) -> Singl
         state = search_result.state
         if w_i <= 0.0:
             state = "no_contact"
+        contact_pressure = float(w_i / tip_area_mm2) if w_i > 0.0 else 0.0
+        micro_damage_risk = (
+            bool(w_i > 0.0 and contact_pressure >= case.damage_pressure_threshold_n_per_mm2)
+            if case.damage_pressure_threshold_n_per_mm2 is not None
+            else None
+        )
         spine_records.append(
             {
                 "case_id": case.case_id,
@@ -183,6 +195,8 @@ def run_single_case(case: SingleCaseInput | None = None, **kwargs: Any) -> Singl
                 "pitch_l_mm": case.pitch_l_mm,
                 "contacted": bool(preload.contacted[idx]),
                 "preload_n": float(w_i),
+                "contact_pressure_proxy_n_per_mm2": contact_pressure,
+                "micro_damage_risk": micro_damage_risk,
                 "u_ax_used_mm": float(preload.u_ax_used_mm[idx]),
                 "normal_saturated": bool(preload.normal_saturated[idx]),
                 "state": state,
@@ -215,6 +229,7 @@ def run_single_case(case: SingleCaseInput | None = None, **kwargs: Any) -> Singl
         search_distance_mm=np.asarray(search_values, dtype=float),
         cap_n=np.asarray(cap_values, dtype=float),
         k_tt_n_per_mm=stiffness.k_tt,
+        cap_mode=cap_mode_values,
     )
     diagnostics["solver_sequence"].append("loading_solved")
     diagnostics["load_displacement_s"] = list(loading.event_displacements_mm)
@@ -227,7 +242,8 @@ def run_single_case(case: SingleCaseInput | None = None, **kwargs: Any) -> Singl
         record["failure_mode"] = loading.failure_mode[idx]
         record["failure_order"] = loading.failure_order[idx]
         if loading.failed[idx]:
-            record["state"] = f"failed_{loading.failure_mode[idx]}"
+            # 失效刺的 state 直接采用文档枚举的 slip / overload，不再使用 failed_* 复合值。
+            record["state"] = loading.failure_mode[idx] or "overload"
 
     spines_df = pd.DataFrame.from_records(spine_records)
     _ensure_schema_columns(spines_df, schema_field_names(stage_spines_schema))
@@ -254,6 +270,20 @@ def run_single_case(case: SingleCaseInput | None = None, **kwargs: Any) -> Singl
 def run(case: SingleCaseInput | None = None, **kwargs: Any) -> SingleCaseResult:
     """P1 的兼容入口，转发到 ``run_single_case``。"""
     return run_single_case(case, **kwargs)
+
+
+def simulate_case_records(
+    case: SingleCaseInput,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    """运行单 case 并返回轻量记录字典，供并行 worker 跨进程传输。
+
+    返回 ``(summary_record, spine_records, diagnostics)``。相比直接传 DataFrame，
+    字典更易 pickle、IPC 开销更小，主进程再批量落盘，避免结果堆积内存。
+    """
+    result = run_single_case(case)
+    summary_record = result.case_summary.iloc[0].to_dict()
+    spine_records = result.case_spines.to_dict("records")
+    return summary_record, spine_records, result.diagnostics
 
 
 def run_single_case_sanity(
@@ -379,15 +409,24 @@ def _build_summary_record(
     n_con = int(spines_df["contacted"].sum())
     n_eng = int(spines_df["engaged"].sum())
     loads = spines_df["load_at_limit_n"].to_numpy(dtype=float)
-    caps = spines_df["cap_n"].to_numpy(dtype=float)
-    effective = (spines_df["engaged"].to_numpy(dtype=bool)) & (caps > 0.0)
-    n_eff_count = int(np.count_nonzero(effective))
+    # Ω_eff 按模型定义为 0 < F_t,i ≤ cap，即在极限点真正承载的刺；
+    # n_eff_count 与 n_eff_kish 统一以 load_at_limit_n > 0 为准，口径一致。
+    effective_loads = loads[loads > 0.0]
+    n_eff_count = int(effective_loads.size)
     load_sum = float(np.sum(loads))
     n_eff_kish = _kish_effective_count(loads)
+    lsi = (
+        float(np.max(effective_loads) / np.mean(effective_loads))
+        if effective_loads.size > 0
+        else None
+    )
+    spine_failure_modes = spines_df["failure_mode"].tolist()
+    n_slip = sum(1 for mode in spine_failure_modes if mode == "slip")
+    n_overload = sum(1 for mode in spine_failure_modes if mode == "overload")
+    micro_damage = spines_df["micro_damage_risk"].dropna()
     search_distances = spines_df.loc[spines_df["engaged"], "search_distance_mm"].dropna().to_numpy(dtype=float)
     preloads = spines_df["preload_n"].to_numpy(dtype=float)
     normal_range_insufficient = bool(preload.normal_range_insufficient)
-    case_status = "completed"
     failure_mode = _case_failure_mode(
         n_con=n_con,
         n_eng=n_eng,
@@ -395,6 +434,8 @@ def _build_summary_record(
         w_total_n=case.w_total_n,
         normal_range_insufficient=normal_range_insufficient,
     )
+    # 文档 §7.4：行程不足等情形记为 warning，并保留该 case，不外推为正常承载。
+    case_status = "warning" if normal_range_insufficient else "completed"
     # 文档要求同时保存“接合成功”和“有效承载成功”，评分默认看 load_success。
     engagement_success = n_eng > 0 and case_status != "failed"
     load_threshold = max(0.01, 0.05 * case.w_total_n)
@@ -407,6 +448,7 @@ def _build_summary_record(
     warning_flags = list(preload.warning_flags)
     if failure_mode is not None and failure_mode not in {"capacity_limit"}:
         warning_flags.append(failure_mode)
+    warning_flags = _dedupe_preserving_order(warning_flags)
     w_sat_mean_n = None
     if stiffness.spring_k_n_per_mm is not None:
         w_sat_mean_n = float(stiffness.spring_k_n_per_mm * 4.0 * np.sin(np.radians(case.alpha_p_deg)))
@@ -432,6 +474,9 @@ def _build_summary_record(
         "alpha_p_deg": case.alpha_p_deg,
         "spring_k_n_per_m": stiffness.spring_k_n_per_m,
         "spring_k_n_per_mm": stiffness.spring_k_n_per_mm,
+        "k_nn_n_per_mm": stiffness.k_nn,
+        "k_tt_n_per_mm": stiffness.k_tt,
+        "k_tn_n_per_mm": stiffness.k_tn,
         "tip_radius_mm": case.tip_radius_mm,
         "spine_diameter_mm": case.spine_diameter_mm,
         "search_travel_mm": case.search_travel_mm,
@@ -440,6 +485,7 @@ def _build_summary_record(
         "phi_s_deg": phi_s_deg,
         "F_ref_star_n": case.F_ref_star_n,
         "trial_force_n": case.trial_force_n,
+        "damage_pressure_threshold_n_per_mm2": case.damage_pressure_threshold_n_per_mm2,
         "surface_rq_raw_mm": surface_record.get("rq_raw_mm"),
         "surface_ra_raw_mm": surface_record.get("ra_raw_mm"),
         "surface_hpv_raw_mm": surface_record.get("hpv_raw_mm"),
@@ -454,6 +500,7 @@ def _build_summary_record(
         "n_eff_count": n_eff_count,
         "n_eff_kish": n_eff_kish,
         "r_con": n_con / n_nom if n_nom else 0.0,
+        "r_uncontacted": _fraction(n_nom - n_con, n_nom),
         "r_eng": n_eng / n_nom if n_nom else 0.0,
         "r_fail_search": _fraction(spines_df["state"].isin(["search_failed"]).sum(), n_nom),
         "search_distance_mean_mm": _mean_or_none(search_distances),
@@ -463,7 +510,8 @@ def _build_summary_record(
         "u_ax_used_mean_mm": _mean_or_none(spines_df["u_ax_used_mm"].to_numpy(dtype=float)),
         "w_sat_mean_n": w_sat_mean_n,
         "r_sat_n": _fraction(spines_df["normal_saturated"].sum(), n_nom),
-        "r_sat_y": 0.0,
+        # 切向搜索行程饱和：刺走完全部 Δy_max 仍未接合，本版与搜索失败等价。
+        "r_sat_y": _fraction(spines_df["state"].isin(["search_failed"]).sum(), n_nom),
         "normal_range_insufficient": normal_range_insufficient,
         "f_t_lim_n": float(loading.f_t_lim_n),
         "f_t_lim_over_w_total": loading.f_t_lim_n / case.w_total_n if case.w_total_n > 0.0 else None,
@@ -471,14 +519,21 @@ def _build_summary_record(
         "f_t_lim_per_eff_n": loading.f_t_lim_n / n_eff_count if n_eff_count else None,
         "limit_displacement_mm": loading.limit_displacement_mm,
         "eta_max": float(np.max(loads) / load_sum) if load_sum > 0.0 else 0.0,
+        "lsi": lsi,
         "w_cv": float(np.std(preloads) / np.mean(preloads)) if np.mean(preloads) > 0.0 else None,
         "engagement_success": engagement_success,
         "load_success": load_success,
         "failure_mode": failure_mode,
         "cascade_failure": bool(loading.cascade_failure),
-        "r_slip": 0.0,
-        "r_overload": _fraction(spines_df["failed"].sum(), n_nom),
+        # slip / overload 按单刺容量受限模式区分统计，不再混为一谈。
+        "r_slip": _fraction(n_slip, n_nom),
+        "r_overload": _fraction(n_overload, n_nom),
         "r_side_contact_risk": _fraction(spines_df["side_contact_risk"].sum(), n_nom),
+        "r_micro_damage_risk": (
+            _fraction(int(micro_damage.astype(bool).sum()), n_nom)
+            if len(micro_damage)
+            else None
+        ),
     }
 
 
@@ -502,7 +557,7 @@ def _default_sanity_cases(
         "w_total_n": 1.0,
         "f_s": 1.0,
         "F_ref_star_n": 0.50,
-        "trial_force_n": 0.05,
+        "trial_force_n": 0.50,
     }
     return [
         SingleCaseInput(
@@ -698,6 +753,11 @@ def _validate_case(case: SingleCaseInput) -> None:
             raise ValueError(f"{name} must be non-negative.")
     if case.pitch_t_mm == 0.0 or case.pitch_l_mm == 0.0:
         raise ValueError("pitch_t_mm and pitch_l_mm must be positive.")
+    if (
+        case.damage_pressure_threshold_n_per_mm2 is not None
+        and case.damage_pressure_threshold_n_per_mm2 < 0.0
+    ):
+        raise ValueError("damage_pressure_threshold_n_per_mm2 must be non-negative when provided.")
 
 
 def _require_pandas() -> Any:
@@ -741,6 +801,17 @@ def _percentile_or_none(values: Any, percentile: float) -> float | None:
 
 def _fraction(count: Any, denom: int) -> float:
     return float(count) / denom if denom else 0.0
+
+
+def _dedupe_preserving_order(items: list[str]) -> list[str]:
+    """去重但保持首次出现顺序。"""
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
 
 
 def _kish_effective_count(loads: Any) -> float:

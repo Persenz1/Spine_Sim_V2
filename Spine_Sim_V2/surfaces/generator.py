@@ -12,7 +12,7 @@ from Spine_Sim_V2.surfaces.profiles import SurfaceProfile, get_surface_profile
 
 
 SURFACE_GENERATOR_VERSION = "multiscale_proxy_v001"
-PROBE_FILTER_VERSION = "fft_gaussian_probe_approx_v001"
+PROBE_FILTER_VERSION = "morphological_closing_tip_v003"
 
 
 @dataclass(frozen=True)
@@ -119,17 +119,64 @@ def probe_filter(
     dx_mm: float,
     dy_mm: float,
 ) -> NDArray[np.float32]:
-    """近似实现有限刺尖半径探针滤波。
+    """以刺尖半径做形态学探针滤波，得到有效接触高度图。
 
-    第一版用 FFT 高斯低通衰减小于刺尖尺度的空间波长。后续可以在保持函数签名
-    不变的前提下，替换为更严格的形态学滚动探针实现。
+    物理含义：真实刺尖具有有限半径 ``r_t``，无法进入比刺尖更窄的谷底。这里用
+    灰度形态学**闭运算**（先膨胀后腐蚀，圆盘结构元半径 = ``r_t``）近似这一约束：
+    比刺尖窄的凹谷被填高，凸峰基本保留，且结果单调满足 ``h_eff >= h_raw``——
+    这与高斯低通会同时压低凸峰的非物理行为不同。
+
+    分辨率限制：当 ``r_t`` 小于网格间距时，刺尖尺度低于采样分辨率，本函数至少按
+    1 个网格的最小刺尖足迹处理（不静默退化为完全无操作）。若要真正体现更精细的
+    刺尖效应，需提高表面分辨率，使 ``r_t`` 至少覆盖数个网格。
+
+    函数签名保持稳定，后续可替换为半球/抛物面滚球等更严格实现。
     """
+    arr = np.asarray(height_raw, dtype=float)
     if tip_radius_mm <= 0:
-        return np.asarray(height_raw, dtype=np.float32).copy()
-    sigma_mm = max(float(tip_radius_mm), 0.25 * max(dx_mm, dy_mm))
-    filtered = _gaussian_lowpass(np.asarray(height_raw, dtype=float), dx_mm, dy_mm, sigma_mm)
-    filtered -= float(np.mean(filtered))
-    return filtered.astype(np.float32)
+        return arr.astype(np.float32).copy()
+    cell_mm = min(float(dx_mm), float(dy_mm))
+    if cell_mm <= 0.0:
+        raise ValueError("dx_mm and dy_mm must be positive for probe filtering.")
+    radius_cells = max(1, int(round(float(tip_radius_mm) / cell_mm)))
+    offsets = _disk_offsets(radius_cells)
+    closed = _grey_erode(_grey_dilate(arr, offsets, radius_cells), offsets, radius_cells)
+    return closed.astype(np.float32)
+
+
+def _disk_offsets(radius_cells: int) -> list[tuple[int, int]]:
+    """生成半径为 ``radius_cells`` 的圆盘结构元的整数偏移集合。"""
+    offsets: list[tuple[int, int]] = []
+    r2 = radius_cells * radius_cells
+    for dy in range(-radius_cells, radius_cells + 1):
+        for dx in range(-radius_cells, radius_cells + 1):
+            if dx * dx + dy * dy <= r2:
+                offsets.append((dy, dx))
+    return offsets
+
+
+def _grey_dilate(
+    arr: NDArray[np.floating], offsets: list[tuple[int, int]], radius_cells: int
+) -> NDArray[np.float64]:
+    """圆盘结构元上的灰度膨胀（局部最大值）。"""
+    ny, nx = arr.shape
+    padded = np.pad(arr, radius_cells, mode="edge")
+    out = np.full_like(arr, -np.inf, dtype=float)
+    for dy, dx in offsets:
+        out = np.maximum(out, padded[radius_cells + dy : radius_cells + dy + ny, radius_cells + dx : radius_cells + dx + nx])
+    return out
+
+
+def _grey_erode(
+    arr: NDArray[np.floating], offsets: list[tuple[int, int]], radius_cells: int
+) -> NDArray[np.float64]:
+    """圆盘结构元上的灰度腐蚀（局部最小值）。"""
+    ny, nx = arr.shape
+    padded = np.pad(arr, radius_cells, mode="edge")
+    out = np.full_like(arr, np.inf, dtype=float)
+    for dy, dx in offsets:
+        out = np.minimum(out, padded[radius_cells + dy : radius_cells + dy + ny, radius_cells + dx : radius_cells + dx + nx])
+    return out
 
 
 def compute_surface_statistics(

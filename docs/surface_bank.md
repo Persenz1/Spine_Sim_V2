@@ -46,6 +46,7 @@ h = h0 + h_peak + h_pit + h_step + h_texture
 ```
 
 The generated height map is mean-centered, normalized to target proxy `Rq`, saved as `height_raw`, and then passed through `probe_filter(height_raw, tip_radius_mm)` to produce `height_filtered`.
+The current probe filter is `morphological_closing_tip_v003`: a flat disk gray-scale closing that fills valleys narrower than the tip footprint and preserves the pointwise bound `height_filtered >= height_raw`. Regenerate old banks before comparing downstream results.
 
 ## Rules
 

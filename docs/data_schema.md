@@ -40,10 +40,11 @@ Summary rows contain:
 - surface references: `surface_bank_id`, `surface_id`, `surface_kind`
 - candidate and geometry fields with units in names
 - preload and search settings
+- `trial_force_n` as the per-spine trial tangential force used in `phi_c`
 - surface statistics copied from the surface bank metadata
 - contact, engagement, effective count, and load metrics
 - success fields: `engagement_success` and `load_success`
-- failure diagnostics
+- failure diagnostics, including `r_slip`, `r_overload`, `r_uncontacted`, and optional micro-damage risk
 
 Rigid arrays must store `spring_k_n_per_m = null` and `spring_k_n_per_mm = null`; never use `0`.
 
@@ -56,9 +57,11 @@ Each row is one spine and includes:
 - `case_id`, `candidate_id`, `surface_id`
 - `spine_id`, `row`, `col`, `x_mm`, `y_mm`
 - gap and preload fields
+- `contact_pressure_proxy_n_per_mm2` and optional `micro_damage_risk`
 - contact/engagement state
 - engagement coordinates and angles
-- capacity and failure fields
+- capacity and failure fields; `cap_mode` uses `none`, `no_geometric_engagement`,
+  `geom_friction`, `strength`, or `self_lock_strength`
 
 No spine table stores raw or filtered height maps.
 

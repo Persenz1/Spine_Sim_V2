@@ -3,21 +3,23 @@
 from __future__ import annotations
 
 import json
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterator
 
 from Spine_Sim_V2.analysis.final_mc import p6_schema_collection, write_final_analysis
-from Spine_Sim_V2.core.types import SingleCaseInput, SchemaField, stage_spines_schema, stage_summary_schema
+from Spine_Sim_V2.core.parallel import map_tasks_unordered, resolve_worker_count
+from Spine_Sim_V2.core.progress import ProgressReporter
+from Spine_Sim_V2.core.types import SingleCaseInput, stage_spines_schema, stage_summary_schema
 from Spine_Sim_V2.io.manifest import create_manifest, write_manifest
-from Spine_Sim_V2.io.parquet_io import write_preview_csv
+from Spine_Sim_V2.io.parquet_io import BatchedParquetWriter, write_preview_csv
 from Spine_Sim_V2.io.schema_io import write_schema
-from Spine_Sim_V2.pipelines.p1_single_case import run_single_case
+from Spine_Sim_V2.pipelines.case_tasks import CaseJob, run_case_job
 from Spine_Sim_V2.surfaces.bank import SurfaceBank
 
 
 P6_PROJECT_NAME = "P6_final_3d_monte_carlo"
+P6_STAGE = "p6_final_3d_monte_carlo"
 P6_SURFACE_KINDS = ("sandpaper", "concrete", "brick", "painted_wall")
 P6_W_TOTAL_N = (0.5, 1.0, 1.5, 2.0, 2.5)
 P6_RANDOM_SEED = 20260617
@@ -53,19 +55,6 @@ class FinalCandidate:
         }
 
 
-@dataclass(frozen=True)
-class CaseTask:
-    """一个 P6 Monte Carlo case 的执行请求。"""
-
-    case_id: str
-    candidate: FinalCandidate
-    surface_id: str
-    surface_kind: str
-    surface_index_within_kind: int
-    w_total_n: float
-    surface_bank_path: Path
-
-
 def run(
     *,
     surface_bank: str | Path,
@@ -73,7 +62,7 @@ def run(
     n_surfaces_per_kind: int = 1000,
     surface_selection: str = "first_n",
     outdir: str | Path = "outputs/P6_final_3d_monte_carlo",
-    workers: int = 1,
+    workers: int | None = None,
     surface_list: str | Path | None = None,
     random_seed: int = P6_RANDOM_SEED,
     w_values: tuple[float, ...] = P6_W_TOTAL_N,
@@ -95,32 +84,34 @@ def run(
         surface_list=surface_list,
         random_seed=random_seed,
     )
-    # P6 是正式统计源：候选 × 表面类别 × 预载 × surface_id 全组合展开。
-    tasks = _iter_case_tasks(
+    n_jobs = len(candidates) * len(P6_SURFACE_KINDS) * n_surfaces_per_kind * len(w_values)
+    # P6 是正式统计源：候选 × 表面类别 × 表面 × 预载全组合，懒展开成 case 任务。
+    jobs = _iter_p6_jobs(
         candidates=candidates,
         surface_bank_path=Path(surface_bank),
+        bank_id=bank.bank_id,
         selected_surfaces=selected_surfaces,
         w_values=w_values,
     )
 
-    summary_writer = _ParquetStreamWriter(data_dir / "final_summary.parquet", schema=stage_summary_schema)
-    spines_writer = _ParquetStreamWriter(data_dir / "final_spines.parquet", schema=stage_spines_schema)
+    summary_writer = BatchedParquetWriter(data_dir / "final_summary.parquet", schema=stage_summary_schema)
+    spines_writer = BatchedParquetWriter(data_dir / "final_spines.parquet", schema=stage_spines_schema)
     preview_rows: list[dict[str, Any]] = []
     case_count = 0
     failed_cases: list[str] = []
-    try:
-        # 正式样本量较大，summary/spines 均流式写入，避免一次性占用大量内存。
-        for summary_df, spines_df, failed_case_id in _run_tasks(tasks, workers=max(1, int(workers))):
-            summary_writer.write(summary_df)
-            spines_writer.write(spines_df)
-            if len(preview_rows) < 5000 and len(summary_df):
-                preview_rows.append(summary_df.iloc[0].to_dict())
-            if failed_case_id is not None:
-                failed_cases.append(failed_case_id)
-            case_count += len(summary_df)
-    finally:
-        summary_writer.close()
-        spines_writer.close()
+    # 正式样本量大：有界并行 + 批量 row group 流式写入，全程内存占用恒定。
+    with summary_writer, spines_writer, ProgressReporter(n_jobs, label=P6_PROJECT_NAME) as bar:
+        for summary_record, spine_records, failed_id in map_tasks_unordered(
+            run_case_job, jobs, workers=workers
+        ):
+            summary_writer.add_record(summary_record)
+            spines_writer.add_records(spine_records)
+            if len(preview_rows) < 5000:
+                preview_rows.append(summary_record)
+            if failed_id is not None:
+                failed_cases.append(failed_id)
+            case_count += 1
+            bar.update()
 
     write_preview_csv(pd.DataFrame.from_records(preview_rows), data_dir / "final_summary_preview.csv")
     write_manifest(
@@ -140,10 +131,10 @@ def run(
                 "surface_selection": surface_selection,
                 "random_seed": random_seed,
                 "w_total_n": list(w_values),
-                "workers": int(workers),
+                "workers": resolve_worker_count(workers),
             },
-            n_cases_expected=len(candidates) * len(P6_SURFACE_KINDS) * n_surfaces_per_kind * len(w_values),
-            n_cases_completed=case_count,
+            n_cases_expected=n_jobs,
+            n_cases_completed=case_count - len(failed_cases),
             failed_cases=failed_cases,
             notes="P6 final Monte Carlo. Full 2D arrays are not saved; cases reference surface_id.",
         ),
@@ -154,6 +145,48 @@ def run(
     _write_sample_cases(stage_dir)
     _write_final_report(stage_dir)
     return stage_dir
+
+
+def _iter_p6_jobs(
+    *,
+    candidates: list[FinalCandidate],
+    surface_bank_path: Path,
+    bank_id: str,
+    selected_surfaces: dict[str, list[str]],
+    w_values: tuple[float, ...],
+) -> Iterator[CaseJob]:
+    """展开 P6 的候选、表面和预载组合为可并行的 case 任务。"""
+    for candidate in candidates:
+        for surface_kind in P6_SURFACE_KINDS:
+            for surface_index, surface_id in enumerate(selected_surfaces[surface_kind]):
+                for w_total_n in w_values:
+                    case_id = _case_id(candidate.candidate_id, w_total_n, surface_id)
+                    yield CaseJob(
+                        case=SingleCaseInput(
+                            surface_bank_path=surface_bank_path,
+                            surface_id=surface_id,
+                            array_type=candidate.array_type,
+                            rows=candidate.rows,
+                            cols=candidate.cols,
+                            pitch_t_mm=candidate.pitch_t_mm,
+                            pitch_l_mm=candidate.pitch_l_mm,
+                            alpha_p_deg=candidate.alpha_p_deg,
+                            spring_k_n_per_m=candidate.spring_k_n_per_m,
+                            tip_radius_mm=0.05,
+                            spine_diameter_mm=0.20,
+                            search_travel_mm=4.0,
+                            w_total_n=w_total_n,
+                            f_s=1.0,
+                            F_ref_star_n=0.50,
+                            trial_force_n=0.50,
+                            candidate_id=candidate.candidate_id,
+                            case_id=case_id,
+                        ),
+                        surface_bank_id=bank_id,
+                        stage=P6_STAGE,
+                        surface_kind=surface_kind,
+                        surface_index_within_kind=surface_index,
+                    )
 
 
 def select_surface_ids(
@@ -218,152 +251,6 @@ def _candidate_from_record(record: dict[str, Any]) -> FinalCandidate:
         source_stage=record.get("source_stage"),
         selection_reason=record.get("selection_reason"),
     )
-
-
-def _iter_case_tasks(
-    *,
-    candidates: list[FinalCandidate],
-    surface_bank_path: Path,
-    selected_surfaces: dict[str, list[str]],
-    w_values: tuple[float, ...],
-) -> Iterable[CaseTask]:
-    """展开 P6 的候选、表面和预载组合。"""
-    for candidate in candidates:
-        for surface_kind in P6_SURFACE_KINDS:
-            for index, surface_id in enumerate(selected_surfaces[surface_kind]):
-                for w_total_n in w_values:
-                    case_id = _case_id(candidate.candidate_id, w_total_n, surface_id)
-                    yield CaseTask(
-                        case_id=case_id,
-                        candidate=candidate,
-                        surface_id=surface_id,
-                        surface_kind=surface_kind,
-                        surface_index_within_kind=index,
-                        w_total_n=w_total_n,
-                        surface_bank_path=surface_bank_path,
-                    )
-
-
-def _run_tasks(tasks: Iterable[CaseTask], *, workers: int) -> Iterable[tuple[Any, Any, str | None]]:
-    """顺序或线程池执行 P6 case 任务。"""
-    if workers <= 1:
-        for task in tasks:
-            yield _run_one_task(task)
-        return
-
-    pending: set[Future[tuple[Any, Any, str | None]]] = set()
-    iterator = iter(tasks)
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        for _ in range(max(1, workers * 4)):
-            try:
-                pending.add(executor.submit(_run_one_task, next(iterator)))
-            except StopIteration:
-                break
-        while pending:
-            done, pending = wait(pending, return_when=FIRST_COMPLETED)
-            for future in done:
-                yield future.result()
-            for _ in range(len(done)):
-                try:
-                    pending.add(executor.submit(_run_one_task, next(iterator)))
-                except StopIteration:
-                    break
-
-
-def _run_one_task(task: CaseTask) -> tuple[Any, Any, str | None]:
-    """执行单个 P6 case；异常 case 转成失败 summary，不静默丢弃。"""
-    try:
-        result = run_single_case(
-            SingleCaseInput(
-                surface_bank_path=task.surface_bank_path,
-                surface_id=task.surface_id,
-                array_type=task.candidate.array_type,
-                rows=task.candidate.rows,
-                cols=task.candidate.cols,
-                pitch_t_mm=task.candidate.pitch_t_mm,
-                pitch_l_mm=task.candidate.pitch_l_mm,
-                alpha_p_deg=task.candidate.alpha_p_deg,
-                spring_k_n_per_m=task.candidate.spring_k_n_per_m,
-                tip_radius_mm=0.05,
-                spine_diameter_mm=0.20,
-                search_travel_mm=4.0,
-                w_total_n=task.w_total_n,
-                f_s=1.0,
-                F_ref_star_n=0.50,
-                trial_force_n=0.05,
-                candidate_id=task.candidate.candidate_id,
-                case_id=task.case_id,
-            )
-        )
-        result.case_summary.loc[:, "stage"] = "p6_final_3d_monte_carlo"
-        result.case_summary.loc[:, "surface_index_within_kind"] = task.surface_index_within_kind
-        result.case_spines.loc[:, "stage"] = "p6_final_3d_monte_carlo"
-        return result.case_summary, result.case_spines, None
-    except Exception as exc:  # pragma: no cover - hard to trigger deterministically.
-        pd = _require_pandas()
-        summary = pd.DataFrame.from_records([_failed_summary_record(task, exc)])
-        spines = pd.DataFrame(columns=[field.name for field in stage_spines_schema])
-        return summary, spines, task.case_id
-
-
-def _failed_summary_record(task: CaseTask, exc: Exception) -> dict[str, Any]:
-    """为失败 case 构造保留字段完整性的 summary 行。"""
-    record = {field.name: None for field in stage_summary_schema}
-    candidate = task.candidate
-    record.update(
-        {
-            "case_id": task.case_id,
-            "stage": "p6_final_3d_monte_carlo",
-            "case_status": "failed",
-            "error_code": type(exc).__name__,
-            "warning_flags": [str(exc)],
-            "surface_bank_id": None,
-            "surface_id": task.surface_id,
-            "surface_kind": task.surface_kind,
-            "surface_seed": None,
-            "candidate_id": candidate.candidate_id,
-            "array_type": candidate.array_type,
-            "rows": candidate.rows,
-            "cols": candidate.cols,
-            "n_nom": candidate.rows * candidate.cols,
-            "pitch_t_mm": candidate.pitch_t_mm,
-            "pitch_l_mm": candidate.pitch_l_mm,
-            "alpha_p_deg": candidate.alpha_p_deg,
-            "spring_k_n_per_m": candidate.spring_k_n_per_m,
-            "spring_k_n_per_mm": None if candidate.spring_k_n_per_m is None else candidate.spring_k_n_per_m / 1000.0,
-            "tip_radius_mm": 0.05,
-            "spine_diameter_mm": 0.20,
-            "search_travel_mm": 4.0,
-            "w_total_n": task.w_total_n,
-            "f_s": 1.0,
-            "phi_s_deg": 45.0,
-            "F_ref_star_n": 0.50,
-            "trial_force_n": 0.05,
-            "n_con": 0,
-            "n_eng": 0,
-            "n_eff_count": 0,
-            "n_eff_kish": 0.0,
-            "r_con": 0.0,
-            "r_eng": 0.0,
-            "r_fail_search": 1.0,
-            "normal_range_insufficient": False,
-            "f_t_lim_n": 0.0,
-            "f_t_lim_over_w_total": 0.0,
-            "f_t_lim_per_nom_n": 0.0,
-            "f_t_lim_per_eff_n": None,
-            "limit_displacement_mm": 0.0,
-            "eta_max": 0.0,
-            "engagement_success": False,
-            "load_success": False,
-            "failure_mode": "case_failed",
-            "cascade_failure": False,
-            "r_slip": 0.0,
-            "r_overload": 0.0,
-            "r_side_contact_risk": 0.0,
-            "surface_index_within_kind": task.surface_index_within_kind,
-        }
-    )
-    return record
 
 
 def _write_sample_cases(stage_dir: Path) -> Path:
@@ -543,96 +430,3 @@ def _json_value(value: Any) -> Any:
     if hasattr(value, "item"):
         return _json_value(value.item())
     return value
-
-
-class _ParquetStreamWriter:
-    """按固定 schema 将 DataFrame 追加写为 Parquet row group。"""
-
-    def __init__(self, path: Path, *, schema: tuple[SchemaField, ...]) -> None:
-        self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._writer: Any = None
-        self._schema_fields = schema
-        self._arrow_schema: Any = None
-        self._has_written = False
-
-    def write(self, df: Any) -> None:
-        if df is None:
-            return
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-
-        normalized = _normalize_for_arrow_schema(df, self._schema_fields)
-        if self._arrow_schema is None:
-            self._arrow_schema = _arrow_schema(self._schema_fields)
-        table = pa.Table.from_pandas(normalized, schema=self._arrow_schema, preserve_index=False)
-        if self._writer is None:
-            self._writer = pq.ParquetWriter(self.path, table.schema)
-        self._writer.write_table(table)
-        self._has_written = True
-
-    def close(self) -> None:
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-
-        if self._writer is not None:
-            self._writer.close()
-            self._writer = None
-        elif not self._has_written:
-            schema = self._arrow_schema or _arrow_schema(self._schema_fields)
-            arrays = [pa.array([], type=field.type) for field in schema]
-            pq.write_table(pa.Table.from_arrays(arrays, schema=schema), self.path)
-
-
-def _normalize_for_arrow_schema(df: Any, schema: tuple[SchemaField, ...]) -> Any:
-    pd = _require_pandas()
-    normalized = df.copy()
-    for field in schema:
-        if field.name not in normalized.columns:
-            normalized[field.name] = None
-        if field.dtype == "float64":
-            normalized[field.name] = pd.to_numeric(normalized[field.name], errors="coerce").astype("float64")
-        elif field.dtype == "int64":
-            normalized[field.name] = pd.to_numeric(normalized[field.name], errors="coerce").astype("Int64")
-        elif field.dtype == "bool":
-            normalized[field.name] = normalized[field.name].astype("boolean")
-        elif field.dtype == "string":
-            normalized[field.name] = normalized[field.name].astype("string")
-        elif field.dtype == "list[string]":
-            normalized[field.name] = normalized[field.name].apply(_string_list)
-    return normalized[[field.name for field in schema]]
-
-
-def _string_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    try:
-        if value != value:
-            return []
-    except ValueError:
-        pass
-    if isinstance(value, str):
-        return [value] if value else []
-    if isinstance(value, (list, tuple)):
-        return [str(item) for item in value if item is not None]
-    return [str(value)]
-
-
-def _arrow_schema(schema: tuple[SchemaField, ...]) -> Any:
-    import pyarrow as pa
-
-    return pa.schema([pa.field(field.name, _arrow_type(field.dtype), nullable=field.nullable) for field in schema])
-
-
-def _arrow_type(dtype: str) -> Any:
-    import pyarrow as pa
-
-    if dtype == "float64":
-        return pa.float64()
-    if dtype == "int64":
-        return pa.int64()
-    if dtype == "bool":
-        return pa.bool_()
-    if dtype == "list[string]":
-        return pa.list_(pa.string())
-    return pa.string()

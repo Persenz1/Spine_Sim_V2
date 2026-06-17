@@ -191,7 +191,8 @@ def _plot_spine_states(*, cases: list[dict[str, Any]], path: Path, plt: Any, plo
         "surface_contact": "#ff7f0e",
         "side_contact": "#9467bd",
         "no_contact": "#7f7f7f",
-        "failed_overload": "#8c564b",
+        "slip": "#17becf",
+        "overload": "#8c564b",
     }
     fig, axes = plt.subplots(
         1,

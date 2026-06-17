@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from Spine_Sim_V2.analysis.ranking import analyze_stage
-from Spine_Sim_V2.core.types import SingleCaseInput
+from Spine_Sim_V2.core.parallel import map_tasks_unordered, resolve_worker_count
+from Spine_Sim_V2.core.progress import ProgressReporter
+from Spine_Sim_V2.core.types import SingleCaseInput, stage_spines_schema, stage_summary_schema
 from Spine_Sim_V2.io.manifest import create_manifest, write_manifest
-from Spine_Sim_V2.io.parquet_io import write_parquet, write_preview_csv
+from Spine_Sim_V2.io.parquet_io import BatchedParquetWriter, write_preview_csv
 from Spine_Sim_V2.io.schema_io import write_schema
-from Spine_Sim_V2.pipelines.p1_single_case import run_single_case
+from Spine_Sim_V2.pipelines.case_tasks import CaseJob, run_case_job
 from Spine_Sim_V2.surfaces.bank import SurfaceBank
 
 
@@ -30,6 +32,7 @@ def run(
     alpha_values: tuple[float, ...] = P2_ALPHA_P_DEG,
     w_values: tuple[float, ...] = P2_W_TOTAL_N,
     surface_kinds: tuple[str, ...] = P2_SURFACE_KINDS,
+    workers: int | None = None,
 ) -> Path:
     """运行 P2 柔顺单刺 ``spring_k_n_per_m x alpha_p_deg`` 初筛。"""
     return _run_screen(
@@ -43,6 +46,7 @@ def run(
         alpha_values=alpha_values,
         w_values=w_values,
         surface_kinds=surface_kinds,
+        workers=workers,
     )
 
 
@@ -58,65 +62,51 @@ def _run_screen(
     alpha_values: tuple[float, ...],
     w_values: tuple[float, ...],
     surface_kinds: tuple[str, ...],
+    workers: int | None = None,
 ) -> Path:
-    """运行 P2/P3 共用的单刺扫描管线。"""
+    """运行 P2/P3 共用的单刺扫描管线（并行 + 流式落盘 + 进度条）。"""
     pd = _require_pandas()
     stage_dir = Path(outdir)
-    for path in (stage_dir / "data", stage_dir / "sample_cases", stage_dir / "figures_report", stage_dir / "reports"):
+    data_dir = stage_dir / "data"
+    for path in (data_dir, stage_dir / "sample_cases", stage_dir / "figures_report", stage_dir / "reports"):
         path.mkdir(parents=True, exist_ok=True)
     bank = SurfaceBank.open(surface_bank)
     selected_surfaces = _select_surface_ids(bank, surface_kinds, n_surfaces_per_kind)
 
-    summary_records: list[dict[str, Any]] = []
-    spine_records: list[dict[str, Any]] = []
-    case_count = 0
-    # 阶段差异只体现在参数网格；每个 case 仍复用同一条物理求解链。
-    for surface_kind in surface_kinds:
-        for surface_id in selected_surfaces[surface_kind]:
-            for alpha in alpha_values:
-                for w_total_n in w_values:
-                    springs = spring_values if spring_values is not None else (None,)
-                    for spring_k in springs:
-                        candidate_id = (
-                            f"k{int(spring_k)}_alpha{int(alpha)}"
-                            if spring_k is not None
-                            else f"alpha{int(alpha)}"
-                        )
-                        case_id = (
-                            f"{stage_name}_{candidate_id}_W{str(w_total_n).replace('.', 'p')}_{surface_id}"
-                        )
-                        result = run_single_case(
-                            SingleCaseInput(
-                                surface_bank_path=Path(surface_bank),
-                                surface_id=surface_id,
-                                array_type=array_type,
-                                rows=1,
-                                cols=1,
-                                pitch_t_mm=4.0,
-                                pitch_l_mm=4.0,
-                                alpha_p_deg=alpha,
-                                spring_k_n_per_m=spring_k,
-                                tip_radius_mm=0.05,
-                                spine_diameter_mm=0.20,
-                                search_travel_mm=4.0,
-                                w_total_n=w_total_n,
-                                f_s=1.0,
-                                F_ref_star_n=0.50,
-                                trial_force_n=0.05,
-                                candidate_id=candidate_id,
-                                case_id=case_id,
-                            )
-                        )
-                        summary_records.append(result.case_summary.iloc[0].to_dict())
-                        spine_records.extend(result.case_spines.to_dict(orient="records"))
-                        case_count += 1
+    jobs = list(
+        _iter_screen_jobs(
+            surface_bank=Path(surface_bank),
+            bank_id=bank.bank_id,
+            stage_name=stage_name,
+            array_type=array_type,
+            selected_surfaces=selected_surfaces,
+            surface_kinds=surface_kinds,
+            alpha_values=alpha_values,
+            w_values=w_values,
+            spring_values=spring_values,
+        )
+    )
 
-    summary = pd.DataFrame.from_records(summary_records)
-    spines = pd.DataFrame.from_records(spine_records)
-    data_dir = stage_dir / "data"
-    write_parquet(summary, data_dir / "stage_summary.parquet")
-    write_preview_csv(summary, data_dir / "stage_summary_preview.csv")
-    write_parquet(spines, data_dir / "stage_spines.parquet")
+    preview_rows: list[dict[str, Any]] = []
+    failed_cases: list[str] = []
+    case_count = 0
+    summary_writer = BatchedParquetWriter(data_dir / "stage_summary.parquet", schema=stage_summary_schema)
+    spines_writer = BatchedParquetWriter(data_dir / "stage_spines.parquet", schema=stage_spines_schema)
+    # 单刺 case 多但每个很轻：流式批量写盘 + 有界并行，避免一次性把全部结果驻留内存。
+    with summary_writer, spines_writer, ProgressReporter(len(jobs), label=project_name) as bar:
+        for summary_record, spine_records, failed_id in map_tasks_unordered(
+            run_case_job, jobs, workers=workers
+        ):
+            summary_writer.add_record(summary_record)
+            spines_writer.add_records(spine_records)
+            if len(preview_rows) < 5000:
+                preview_rows.append(summary_record)
+            if failed_id is not None:
+                failed_cases.append(failed_id)
+            case_count += 1
+            bar.update()
+
+    write_preview_csv(pd.DataFrame.from_records(preview_rows), data_dir / "stage_summary_preview.csv")
     write_schema(stage_dir)
     manifest = create_manifest(
         project_name="Spine_Sim_V2",
@@ -132,16 +122,72 @@ def _run_screen(
             "w_total_n": list(w_values),
             "surface_kinds": list(surface_kinds),
             "n_surfaces_per_kind": n_surfaces_per_kind,
+            "workers": resolve_worker_count(workers),
         },
-        n_cases_expected=case_count,
-        n_cases_completed=len(summary),
-        failed_cases=[],
+        n_cases_expected=len(jobs),
+        n_cases_completed=case_count - len(failed_cases),
+        failed_cases=failed_cases,
         notes="Single-spine screening stage; no surface arrays are duplicated in stage tables.",
     )
     write_manifest(manifest, stage_dir)
     analyze_stage(stage_dir)
     _write_stage_report(stage_dir, project_name)
     return stage_dir
+
+
+def _iter_screen_jobs(
+    *,
+    surface_bank: Path,
+    bank_id: str,
+    stage_name: str,
+    array_type: str,
+    selected_surfaces: dict[str, list[str]],
+    surface_kinds: tuple[str, ...],
+    alpha_values: tuple[float, ...],
+    w_values: tuple[float, ...],
+    spring_values: tuple[float, ...] | None,
+) -> Iterator[CaseJob]:
+    """展开 P2/P3 单刺扫描的 case 任务；阶段差异仅体现在参数网格。"""
+    for surface_kind in surface_kinds:
+        for surface_index, surface_id in enumerate(selected_surfaces[surface_kind]):
+            for alpha in alpha_values:
+                for w_total_n in w_values:
+                    springs = spring_values if spring_values is not None else (None,)
+                    for spring_k in springs:
+                        candidate_id = (
+                            f"k{int(spring_k)}_alpha{int(alpha)}"
+                            if spring_k is not None
+                            else f"alpha{int(alpha)}"
+                        )
+                        case_id = (
+                            f"{stage_name}_{candidate_id}_W{str(w_total_n).replace('.', 'p')}_{surface_id}"
+                        )
+                        yield CaseJob(
+                            case=SingleCaseInput(
+                                surface_bank_path=surface_bank,
+                                surface_id=surface_id,
+                                array_type=array_type,
+                                rows=1,
+                                cols=1,
+                                pitch_t_mm=4.0,
+                                pitch_l_mm=4.0,
+                                alpha_p_deg=alpha,
+                                spring_k_n_per_m=spring_k,
+                                tip_radius_mm=0.05,
+                                spine_diameter_mm=0.20,
+                                search_travel_mm=4.0,
+                                w_total_n=w_total_n,
+                                f_s=1.0,
+                                F_ref_star_n=0.50,
+                                trial_force_n=0.50,
+                                candidate_id=candidate_id,
+                                case_id=case_id,
+                            ),
+                            surface_bank_id=bank_id,
+                            stage=stage_name,
+                            surface_kind=surface_kind,
+                            surface_index_within_kind=surface_index,
+                        )
 
 
 def _select_surface_ids(

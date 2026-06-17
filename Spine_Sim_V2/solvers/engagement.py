@@ -84,16 +84,16 @@ def compute_capacity_n(
 ) -> CapacityResult:
     """计算有限的单刺容量，禁止自锁区出现 ``tan`` 发散承载。"""
     if preload_n <= 0.0 or not np.isfinite(phi_eng_deg):
-        return CapacityResult(cap_n=0.0, cap_mode="no_engagement")
+        return CapacityResult(cap_n=0.0, cap_mode="none")
     if F_ref_star_n < 0.0:
         raise ValueError("F_ref_star_n must be non-negative.")
     beta_deg = phi_eng_deg + phi_s_deg_from_friction(f_s)
     if beta_deg <= 0.0:
-        return CapacityResult(cap_n=0.0, cap_mode="no_geometric_capacity")
+        return CapacityResult(cap_n=0.0, cap_mode="no_geometric_engagement")
     if beta_deg >= 90.0:
         # 自锁区只表示几何上不滑脱，承载仍受综合强度上限 F_ref_star_n 限制。
         return CapacityResult(cap_n=float(F_ref_star_n), cap_mode="self_lock_strength")
     f_geom = preload_n * tan(np.radians(beta_deg))
     if f_geom <= F_ref_star_n:
-        return CapacityResult(cap_n=float(f_geom), cap_mode="geom")
+        return CapacityResult(cap_n=float(f_geom), cap_mode="geom_friction")
     return CapacityResult(cap_n=float(F_ref_star_n), cap_mode="strength")

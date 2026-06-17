@@ -7,10 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from Spine_Sim_V2.analysis.scoring import score_high, score_low
+from Spine_Sim_V2.analysis.statistics import _distribution_aggs, _with_derived_columns
 from Spine_Sim_V2.core.types import SchemaField, stage_spines_schema, stage_summary_schema
 from Spine_Sim_V2.io.manifest import create_manifest, write_manifest
 from Spine_Sim_V2.io.parquet_io import read_parquet, write_parquet
-from Spine_Sim_V2.io.schema_io import write_schema
+from Spine_Sim_V2.io.schema_io import dataframe_schema, write_schema
 
 
 FINAL_GROUP_KEYS = [
@@ -62,68 +63,31 @@ def p6_schema_collection(grouped: Any, rankings: Any, convergence: Any) -> dict[
     }
 
 
-def dataframe_schema(df: Any) -> tuple[SchemaField, ...]:
-    """为分析输出表推断轻量 schema 文档。"""
-    return tuple(
-        SchemaField(
-            name=str(column),
-            dtype=_schema_dtype(df[column]),
-            unit=_unit_from_field_name(str(column)),
-            nullable=bool(df[column].isna().any()) if len(df) else True,
-            description=str(column).replace("_", " "),
-        )
-        for column in df.columns
-    )
-
-
 def final_grouped_statistics(summary: Any) -> Any:
     """按 P6 正式 Monte Carlo 维度聚合 summary。"""
+    summary = _with_derived_columns(summary)
     # P6 保留 candidate × surface_kind × w_total_n 等键，便于后续表面泛化和预载效率分析。
     grouped = (
         summary.groupby(FINAL_GROUP_KEYS, dropna=False)
         .agg(
             n_cases=("case_id", "count"),
             n_success=("load_success", "sum"),
+            n_engagement_success=("engagement_success", "sum"),
             success_probability=("load_success", "mean"),
-            f_t_lim_n_mean=("f_t_lim_n", "mean"),
-            f_t_lim_n_median=("f_t_lim_n", "median"),
-            f_t_lim_n_std=("f_t_lim_n", "std"),
-            f_t_lim_n_p05=("f_t_lim_n", lambda s: s.quantile(0.05)),
-            f_t_lim_n_p25=("f_t_lim_n", lambda s: s.quantile(0.25)),
-            f_t_lim_n_p75=("f_t_lim_n", lambda s: s.quantile(0.75)),
-            f_t_lim_n_p95=("f_t_lim_n", lambda s: s.quantile(0.95)),
-            f_t_lim_over_w_total_mean=("f_t_lim_over_w_total", "mean"),
-            f_t_lim_over_w_total_median=("f_t_lim_over_w_total", "median"),
-            f_t_lim_over_w_total_std=("f_t_lim_over_w_total", "std"),
-            f_t_lim_over_w_total_p05=("f_t_lim_over_w_total", lambda s: s.quantile(0.05)),
-            f_t_lim_over_w_total_p25=("f_t_lim_over_w_total", lambda s: s.quantile(0.25)),
-            f_t_lim_over_w_total_p75=("f_t_lim_over_w_total", lambda s: s.quantile(0.75)),
-            f_t_lim_over_w_total_p95=("f_t_lim_over_w_total", lambda s: s.quantile(0.95)),
-            eta_max_mean=("eta_max", "mean"),
-            eta_max_median=("eta_max", "median"),
-            eta_max_std=("eta_max", "std"),
-            eta_max_p05=("eta_max", lambda s: s.quantile(0.05)),
-            eta_max_p25=("eta_max", lambda s: s.quantile(0.25)),
-            eta_max_p75=("eta_max", lambda s: s.quantile(0.75)),
-            eta_max_p95=("eta_max", lambda s: s.quantile(0.95)),
-            n_eff_kish_mean=("n_eff_kish", "mean"),
-            n_eff_kish_median=("n_eff_kish", "median"),
-            n_eff_kish_std=("n_eff_kish", "std"),
-            n_eff_kish_p05=("n_eff_kish", lambda s: s.quantile(0.05)),
-            n_eff_kish_p25=("n_eff_kish", lambda s: s.quantile(0.25)),
-            n_eff_kish_p75=("n_eff_kish", lambda s: s.quantile(0.75)),
-            n_eff_kish_p95=("n_eff_kish", lambda s: s.quantile(0.95)),
-            n_eng_mean=("n_eng", "mean"),
-            n_eng_median=("n_eng", "median"),
-            n_eng_std=("n_eng", "std"),
-            n_eng_p05=("n_eng", lambda s: s.quantile(0.05)),
-            n_eng_p25=("n_eng", lambda s: s.quantile(0.25)),
-            n_eng_p75=("n_eng", lambda s: s.quantile(0.75)),
-            n_eng_p95=("n_eng", lambda s: s.quantile(0.95)),
-            r_fail_search_mean=("r_fail_search", "mean"),
-            r_sat_n_mean=("r_sat_n", "mean"),
-            r_sat_y_mean=("r_sat_y", "mean"),
-            r_side_contact_risk_mean=("r_side_contact_risk", "mean"),
+            engagement_success_probability=("engagement_success", "mean"),
+            **_distribution_aggs("f_t_lim_n"),
+            **_distribution_aggs("f_t_lim_over_w_total"),
+            **_distribution_aggs("eta_max"),
+            **_distribution_aggs("n_eff_kish"),
+            **_distribution_aggs("n_eng"),
+            **_distribution_aggs("r_uncontacted"),
+            **_distribution_aggs("r_fail_search"),
+            **_distribution_aggs("r_sat_n"),
+            **_distribution_aggs("r_sat_y"),
+            **_distribution_aggs("r_side_contact_risk"),
+            **_distribution_aggs("r_slip"),
+            **_distribution_aggs("r_overload"),
+            **_distribution_aggs("r_micro_damage_risk"),
             cascade_failure_rate=("cascade_failure", "mean"),
             normal_range_insufficient_rate=("normal_range_insufficient", "mean"),
         )
@@ -201,6 +165,14 @@ def rank_final_candidates(grouped: Any) -> Any:
             eta_max_mean=("eta_max_mean", "mean"),
             n_eff_kish_mean=("n_eff_kish_mean", "mean"),
             n_eng_mean=("n_eng_mean", "mean"),
+            r_uncontacted_mean=("r_uncontacted_mean", "mean"),
+            r_fail_search_mean=("r_fail_search_mean", "mean"),
+            r_sat_n_mean=("r_sat_n_mean", "mean"),
+            r_sat_y_mean=("r_sat_y_mean", "mean"),
+            r_side_contact_risk_mean=("r_side_contact_risk_mean", "mean"),
+            r_slip_mean=("r_slip_mean", "mean"),
+            r_overload_mean=("r_overload_mean", "mean"),
+            r_micro_damage_risk_mean=("r_micro_damage_risk_mean", "mean"),
             n_cases=("n_cases", "sum"),
             array_type=("array_type", "first"),
             rows=("rows", "first"),
@@ -255,6 +227,14 @@ def rank_final_candidates(grouped: Any) -> Any:
             "eta_max_mean",
             "n_eff_kish_mean",
             "n_eng_mean",
+            "r_uncontacted_mean",
+            "r_fail_search_mean",
+            "r_sat_n_mean",
+            "r_sat_y_mean",
+            "r_side_contact_risk_mean",
+            "r_slip_mean",
+            "r_overload_mean",
+            "r_micro_damage_risk_mean",
             "n_cases",
             "rows",
             "cols",
@@ -533,34 +513,6 @@ def _json_value(value: Any) -> Any:
     if hasattr(value, "item"):
         return _json_value(value.item())
     return value
-
-
-def _schema_dtype(series: Any) -> str:
-    import pandas as pd
-
-    if pd.api.types.is_bool_dtype(series):
-        return "bool"
-    if pd.api.types.is_integer_dtype(series):
-        return "int64"
-    if pd.api.types.is_float_dtype(series):
-        return "float64"
-    if series.apply(lambda value: isinstance(value, (list, tuple))).any():
-        return "list[string]"
-    return "string"
-
-
-def _unit_from_field_name(name: str) -> str | None:
-    if name.endswith("_n_per_m"):
-        return "N/m"
-    if name.endswith("_n_per_mm"):
-        return "N/mm"
-    if name.endswith("_mm"):
-        return "mm"
-    if name.endswith("_n") or "_n_" in name:
-        return "N"
-    if name.endswith("_deg"):
-        return "deg"
-    return None
 
 
 def _require_pandas() -> Any:

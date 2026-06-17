@@ -50,6 +50,7 @@ class SingleCaseInput:
     trial_force_n: float
     candidate_id: str = "candidate_000"
     case_id: str = "case_000"
+    damage_pressure_threshold_n_per_mm2: float | None = None
 
 
 @dataclass(frozen=True)
@@ -115,6 +116,14 @@ def _field(
     )
 
 
+def _distribution_fields(name: str, unit: str | None = None) -> tuple[SchemaField, ...]:
+    """为 grouped statistics 生成完整分布统计字段。"""
+    return tuple(
+        _field(f"{name}_{suffix}", "float64", unit, nullable=True)
+        for suffix in ("mean", "median", "std", "p05", "p25", "p75", "p95", "min", "max")
+    )
+
+
 stage_summary_schema: tuple[SchemaField, ...] = (
     _field("case_id", "string", description="Unique case identifier."),
     _field("stage", "string", description="Pipeline stage identifier."),
@@ -153,6 +162,27 @@ stage_summary_schema: tuple[SchemaField, ...] = (
         nullable=True,
         description="Internal axial spring stiffness; null for rigid arrays.",
     ),
+    _field(
+        "k_nn_n_per_mm",
+        "float64",
+        "N/mm",
+        nullable=True,
+        description="Normal projected compliant stiffness k_s*sin^2(alpha); null for rigid arrays.",
+    ),
+    _field(
+        "k_tt_n_per_mm",
+        "float64",
+        "N/mm",
+        nullable=True,
+        description="Tangential projected compliant stiffness k_s*cos^2(alpha); null for rigid arrays.",
+    ),
+    _field(
+        "k_tn_n_per_mm",
+        "float64",
+        "N/mm",
+        nullable=True,
+        description="Tangential-normal coupling k_s*sin(alpha)*cos(alpha); structural indicator, null for rigid.",
+    ),
     _field("tip_radius_mm", "float64", "mm", description="Spine tip radius."),
     _field("spine_diameter_mm", "float64", "mm", description="Spine shaft diameter."),
     _field("search_travel_mm", "float64", "mm", description="Available tangential search travel."),
@@ -160,7 +190,19 @@ stage_summary_schema: tuple[SchemaField, ...] = (
     _field("f_s", "float64", description="Static friction coefficient at the tip-surface contact."),
     _field("phi_s_deg", "float64", "deg", description="Friction angle."),
     _field("F_ref_star_n", "float64", "N", description="Reference calibrated spine-surface strength."),
-    _field("trial_force_n", "float64", "N", description="Trial tangential force for success checks."),
+    _field(
+        "trial_force_n",
+        "float64",
+        "N",
+        description="Per-spine trial tangential force used to compute phi_c.",
+    ),
+    _field(
+        "damage_pressure_threshold_n_per_mm2",
+        "float64",
+        "N/mm^2",
+        nullable=True,
+        description="Optional micro-damage risk threshold p_c; null means risk flag is not evaluated.",
+    ),
     _field("surface_rq_raw_mm", "float64", "mm", description="Raw surface RMS roughness."),
     _field("surface_ra_raw_mm", "float64", "mm", description="Raw surface mean absolute roughness."),
     _field("surface_hpv_raw_mm", "float64", "mm", description="Raw surface peak-to-valley height."),
@@ -180,6 +222,7 @@ stage_summary_schema: tuple[SchemaField, ...] = (
     _field("n_eff_count", "int64", description="Count of load-bearing effective spines."),
     _field("n_eff_kish", "float64", description="Kish effective load-bearing spine count."),
     _field("r_con", "float64", description="Contact ratio relative to nominal spine count."),
+    _field("r_uncontacted", "float64", description="Uncontacted ratio relative to nominal spine count."),
     _field("r_eng", "float64", description="Engagement ratio relative to nominal spine count."),
     _field("r_fail_search", "float64", description="Fraction that failed finite search."),
     _field("search_distance_mean_mm", "float64", "mm", nullable=True, description="Mean search distance."),
@@ -206,6 +249,12 @@ stage_summary_schema: tuple[SchemaField, ...] = (
     _field("f_t_lim_per_eff_n", "float64", "N", nullable=True, description="Load limit per effective spine."),
     _field("limit_displacement_mm", "float64", "mm", nullable=True, description="Tangential displacement at limit."),
     _field("eta_max", "float64", nullable=True, description="Maximum single-spine load share."),
+    _field(
+        "lsi",
+        "float64",
+        nullable=True,
+        description="Load sharing index: peak-to-mean single-spine load over the effective set.",
+    ),
     _field("w_cv", "float64", nullable=True, description="Coefficient of variation of local normal preload."),
     _field("engagement_success", "bool", description="True when engagement success criterion is met."),
     _field("load_success", "bool", description="True when load success criterion is met."),
@@ -214,6 +263,12 @@ stage_summary_schema: tuple[SchemaField, ...] = (
     _field("r_slip", "float64", nullable=True, description="Fraction failing by slip."),
     _field("r_overload", "float64", nullable=True, description="Fraction failing by overload."),
     _field("r_side_contact_risk", "float64", nullable=True, description="Fraction with side contact risk."),
+    _field(
+        "r_micro_damage_risk",
+        "float64",
+        nullable=True,
+        description="Fraction whose contact pressure proxy exceeds the configured micro-damage threshold.",
+    ),
 )
 
 
@@ -233,6 +288,19 @@ stage_spines_schema: tuple[SchemaField, ...] = (
     _field("pitch_l_mm", "float64", "mm", description="Lateral pitch."),
     _field("contacted", "bool", description="True when the spine contacts the surface."),
     _field("preload_n", "float64", "N", nullable=True, description="Local normal preload magnitude."),
+    _field(
+        "contact_pressure_proxy_n_per_mm2",
+        "float64",
+        "N/mm^2",
+        nullable=True,
+        description="Micro-damage risk proxy W_i/(pi*r_t^2); diagnostic only, never enhances capacity.",
+    ),
+    _field(
+        "micro_damage_risk",
+        "bool",
+        nullable=True,
+        description="True when contact pressure proxy exceeds configured p_c; null when p_c is absent.",
+    ),
     _field("u_ax_used_mm", "float64", "mm", nullable=True, description="Axial compression used."),
     _field("normal_saturated", "bool", description="True when normal compliance saturates."),
     _field("state", "string", description="Final spine state."),
@@ -259,16 +327,35 @@ stage_grouped_statistics_schema: tuple[SchemaField, ...] = (
     _field("group_by", "list[string]", description="Fields used to define the group."),
     _field("candidate_id", "string", nullable=True, description="Candidate identifier if grouped by candidate."),
     _field("surface_kind", "string", nullable=True, description="Surface family if grouped by surface kind."),
+    _field("w_total_n", "float64", "N", nullable=True, description="Total normal preload group value."),
     _field("n_cases", "int64", description="Number of cases in the group."),
     _field("n_success", "int64", description="Number of successful cases in the group."),
+    _field("n_engagement_success", "int64", description="Number of cases with at least one engaged spine."),
+    _field("success_probability", "float64", description="Load success probability."),
     _field("success_rate", "float64", description="Success fraction."),
-    _field("f_t_lim_n_mean", "float64", "N", nullable=True, description="Mean tangential load limit."),
-    _field("f_t_lim_n_median", "float64", "N", nullable=True, description="Median tangential load limit."),
-    _field("f_t_lim_n_p05", "float64", "N", nullable=True, description="5th percentile tangential load limit."),
-    _field("f_t_lim_n_p95", "float64", "N", nullable=True, description="95th percentile tangential load limit."),
-    _field("n_eff_kish_mean", "float64", nullable=True, description="Mean Kish effective spine count."),
-    _field("eta_max_mean", "float64", nullable=True, description="Mean maximum single-spine load share."),
-    _field("r_fail_search_mean", "float64", nullable=True, description="Mean finite-search failure fraction."),
+    _field("engagement_success_probability", "float64", description="Engagement success probability."),
+    *_distribution_fields("f_t_lim_n", "N"),
+    *_distribution_fields("f_t_lim_over_w_total"),
+    *_distribution_fields("n_eff_kish"),
+    *_distribution_fields("n_eng"),
+    *_distribution_fields("eta_max"),
+    *_distribution_fields("r_uncontacted"),
+    *_distribution_fields("r_fail_search"),
+    *_distribution_fields("r_sat_n"),
+    *_distribution_fields("r_sat_y"),
+    *_distribution_fields("r_side_contact_risk"),
+    *_distribution_fields("r_slip"),
+    *_distribution_fields("r_overload"),
+    *_distribution_fields("r_micro_damage_risk"),
+    _field("cascade_failure_rate", "float64", nullable=True, description="Mean cascade failure indicator."),
+    _field("normal_range_insufficient_rate", "float64", nullable=True, description="Mean normal range warning indicator."),
+    _field("alpha_p_deg", "float64", "deg", nullable=True, description="Representative pitch angle."),
+    _field("spring_k_n_per_m", "float64", "N/m", nullable=True, description="Representative spring stiffness."),
+    _field("rows", "int64", nullable=True, description="Representative row count."),
+    _field("cols", "int64", nullable=True, description="Representative column count."),
+    _field("pitch_t_mm", "float64", "mm", nullable=True, description="Representative tangential pitch."),
+    _field("pitch_l_mm", "float64", "mm", nullable=True, description="Representative lateral pitch."),
+    _field("array_type", "string", nullable=True, description="Representative array type."),
 )
 
 

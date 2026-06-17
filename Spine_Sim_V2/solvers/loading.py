@@ -23,23 +23,40 @@ class LoadingResult:
     event_total_force_n: tuple[float, ...] = ()
 
 
+def _failure_mode_for_cap_mode(cap_mode: str | None) -> str:
+    """根据单刺容量受限模式区分失效语义。
+
+    几何—摩擦受限（``geom_friction``）对应模型 §6.5/§8.3 的滑脱（slip）；强度受限
+    （``strength`` / ``self_lock_strength``）对应 §8.4 的强度过载（overload）。
+    缺省（无 cap_mode 信息）保守记为 overload。
+    """
+    if cap_mode == "geom_friction":
+        return "slip"
+    return "overload"
+
+
 def run_loading_sequence(
     *,
     engaged: NDArray[np.bool_],
     search_distance_mm: NDArray[np.floating],
     cap_n: NDArray[np.floating],
     k_tt_n_per_mm: float | None,
+    cap_mode: list[str | None] | None = None,
 ) -> LoadingResult:
     """执行简化的位移控制事件序列。
 
     已接合刺在搜索距离 ``X_i`` 之后开始承载，载荷按
     ``k_share * (s - X_i)`` 增长；达到容量的刺在事件点移除。刚性阵列使用
     数值共享刚度，因为第一版不把刚性切向弹性作为真实物理参数标定。
+
+    ``cap_mode`` 给出每根刺的容量受限模式，用于把失效事件区分为 slip / overload；
+    缺省时退化为统一记为 overload（保持与旧行为兼容）。
     """
     engaged_arr = np.asarray(engaged, dtype=bool)
     search = np.asarray(search_distance_mm, dtype=float)
     caps = np.asarray(cap_n, dtype=float)
     n = len(caps)
+    cap_modes: list[str | None] = list(cap_mode) if cap_mode is not None else [None] * n
     k_share = float(k_tt_n_per_mm) if k_tt_n_per_mm is not None and k_tt_n_per_mm > 0.0 else 1.0
     loads_at_best = np.zeros(n, dtype=float)
     failed = np.zeros(n, dtype=bool)
@@ -85,7 +102,7 @@ def run_loading_sequence(
             if not failed[idx]:
                 event_order += 1
                 failed[idx] = True
-                failure_mode[idx] = "overload"
+                failure_mode[idx] = _failure_mode_for_cap_mode(cap_modes[idx])
                 failure_order[idx] = event_order
                 remaining[idx] = False
 

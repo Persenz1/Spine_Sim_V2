@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 from Spine_Sim_V2 import __version__
+
+
+_FORWARD_COMMANDS = {"simulate", "analyze", "plot"}
 
 
 def build_parser(program: str | None = None) -> argparse.ArgumentParser:
@@ -26,26 +30,33 @@ def build_parser(program: str | None = None) -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command")
 
+    # 顶层 spine-sim 作为统一入口，把子命令转发到真正的 simulate/analyze/plot 实现，
+    # 等价于 spine-sim-simulate / scripts/simulate.py 等。
     simulate = subparsers.add_parser(
         "simulate",
-        help="Run a simulation pipeline placeholder.",
-        description="Phase 0 placeholder for future simulation pipelines.",
+        help="Forward to the simulation pipelines (see `simulate --help`).",
+        description="Run simulation pipelines; arguments are forwarded to the simulate CLI.",
+        add_help=False,
     )
-    _add_simulate_arguments(simulate)
+    simulate.add_argument("args", nargs=argparse.REMAINDER)
     simulate.set_defaults(handler=_handle_simulate)
 
     analyze = subparsers.add_parser(
         "analyze",
-        help="Run analysis placeholder.",
-        description="Phase 0 placeholder for future statistics and rankings.",
+        help="Forward to the analysis pipelines (see `analyze --help`).",
+        description="Run analysis pipelines; arguments are forwarded to the analyze CLI.",
+        add_help=False,
     )
+    analyze.add_argument("args", nargs=argparse.REMAINDER)
     analyze.set_defaults(handler=_handle_analyze)
 
     plot = subparsers.add_parser(
         "plot",
-        help="Run plotting placeholder.",
-        description="Phase 0 placeholder for future figure generation.",
+        help="Forward to the plotting pipelines (see `plot --help`).",
+        description="Run plotting pipelines; arguments are forwarded to the plot CLI.",
+        add_help=False,
     )
+    plot.add_argument("args", nargs=argparse.REMAINDER)
     plot.set_defaults(handler=_handle_plot)
 
     return parser
@@ -87,6 +98,12 @@ def build_simulate_parser(program: str | None = None) -> argparse.ArgumentParser
         action="store_true",
         help="Replace an existing generated bank directory.",
     )
+    p0.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Parallel worker processes. Default: auto (CPU thread count).",
+    )
     p0.set_defaults(handler=_handle_p0_surface_bank)
     p1 = subparsers.add_parser(
         "p1-single-case",
@@ -122,6 +139,12 @@ def build_simulate_parser(program: str | None = None) -> argparse.ArgumentParser
     p2.add_argument("--surface-bank", required=True, help="Path to surface bank.")
     p2.add_argument("--n-surfaces-per-kind", type=int, default=100)
     p2.add_argument("--outdir", default="outputs/P2_compliant_k_alpha_screen")
+    p2.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Parallel worker processes. Default: auto (CPU thread count).",
+    )
     p2.set_defaults(handler=_handle_p2_compliant_k_alpha)
 
     p3 = subparsers.add_parser(
@@ -131,6 +154,12 @@ def build_simulate_parser(program: str | None = None) -> argparse.ArgumentParser
     p3.add_argument("--surface-bank", required=True, help="Path to surface bank.")
     p3.add_argument("--n-surfaces-per-kind", type=int, default=100)
     p3.add_argument("--outdir", default="outputs/P3_rigid_alpha_screen")
+    p3.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Parallel worker processes. Default: auto (CPU thread count).",
+    )
     p3.set_defaults(handler=_handle_p3_rigid_alpha)
 
     p5a = subparsers.add_parser(
@@ -142,6 +171,12 @@ def build_simulate_parser(program: str | None = None) -> argparse.ArgumentParser
     p5a.add_argument("--p3-selected", required=True, help="P3 selected_candidates.json path.")
     p5a.add_argument("--n-surfaces-per-kind", type=int, default=50)
     p5a.add_argument("--outdir", default="outputs/P5a_array_pitch_coarse_screen")
+    p5a.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Parallel worker processes. Default: auto (CPU thread count).",
+    )
     p5a.set_defaults(handler=_handle_p5a_array_coarse)
 
     p5b = subparsers.add_parser(
@@ -152,6 +187,12 @@ def build_simulate_parser(program: str | None = None) -> argparse.ArgumentParser
     p5b.add_argument("--p5a-selected", required=True, help="P5a selected_candidates.json path.")
     p5b.add_argument("--n-surfaces-per-kind", type=int, default=200)
     p5b.add_argument("--outdir", default="outputs/P5b_array_pitch_refine_screen")
+    p5b.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Parallel worker processes. Default: auto (CPU thread count).",
+    )
     p5b.set_defaults(handler=_handle_p5b_array_refine)
 
     p6 = subparsers.add_parser(
@@ -177,7 +218,12 @@ def build_simulate_parser(program: str | None = None) -> argparse.ArgumentParser
         help="JSON file or comma-separated surface_id list for explicit_list selection.",
     )
     p6.add_argument("--outdir", default="outputs/P6_final_3d_monte_carlo")
-    p6.add_argument("--workers", type=int, default=1, help="Parallel worker threads. Default: 1.")
+    p6.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Parallel worker processes. Default: auto (CPU thread count).",
+    )
     p6.add_argument("--random-seed", type=int, default=20260617, help="Seed for random_fixed.")
     p6.set_defaults(handler=_handle_p6_final_mc)
     return parser
@@ -322,18 +368,8 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_simulate_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--stage",
-        default="p0",
-        choices=["p0", "p1", "p2", "p3", "p5", "p6"],
-        help="Pipeline stage to run when implemented.",
-    )
-
-
 def _handle_simulate(args: argparse.Namespace) -> int:
-    print(f"Simulation stage {args.stage} is not implemented in Phase 0.")
-    return 0
+    return simulate_main(list(args.args), program="spine-sim simulate")
 
 
 def _handle_p0_surface_bank(args: argparse.Namespace) -> int:
@@ -350,6 +386,7 @@ def _handle_p0_surface_bank(args: argparse.Namespace) -> int:
         outdir=args.outdir,
         base_seed=args.base_seed,
         overwrite=args.overwrite,
+        workers=args.workers,
     )
     print(f"Generated surface bank {bank.bank_id} at {bank.root}")
     return 0
@@ -375,6 +412,7 @@ def _handle_p2_compliant_k_alpha(args: argparse.Namespace) -> int:
         surface_bank=args.surface_bank,
         n_surfaces_per_kind=args.n_surfaces_per_kind,
         outdir=args.outdir,
+        workers=args.workers,
     )
     print(f"Generated P2 compliant k-alpha screen at {stage_dir}")
     return 0
@@ -387,6 +425,7 @@ def _handle_p3_rigid_alpha(args: argparse.Namespace) -> int:
         surface_bank=args.surface_bank,
         n_surfaces_per_kind=args.n_surfaces_per_kind,
         outdir=args.outdir,
+        workers=args.workers,
     )
     print(f"Generated P3 rigid alpha screen at {stage_dir}")
     return 0
@@ -401,6 +440,7 @@ def _handle_p5a_array_coarse(args: argparse.Namespace) -> int:
         p3_selected=args.p3_selected,
         n_surfaces_per_kind=args.n_surfaces_per_kind,
         outdir=args.outdir,
+        workers=args.workers,
     )
     print(f"Generated P5a array coarse screen at {stage_dir}")
     return 0
@@ -414,6 +454,7 @@ def _handle_p5b_array_refine(args: argparse.Namespace) -> int:
         p5a_selected=args.p5a_selected,
         n_surfaces_per_kind=args.n_surfaces_per_kind,
         outdir=args.outdir,
+        workers=args.workers,
     )
     print(f"Generated P5b array refine screen at {stage_dir}")
     return 0
@@ -437,8 +478,7 @@ def _handle_p6_final_mc(args: argparse.Namespace) -> int:
 
 
 def _handle_analyze(args: argparse.Namespace) -> int:
-    print("Analysis is not implemented in Phase 0.")
-    return 0
+    return analyze_main(list(args.args), program="spine-sim analyze")
 
 
 def _handle_analyze_stage(args: argparse.Namespace) -> int:
@@ -482,8 +522,7 @@ def _handle_analyze_p8_preload_efficiency(args: argparse.Namespace) -> int:
 
 
 def _handle_plot(args: argparse.Namespace) -> int:
-    print("Plotting is not implemented in Phase 0.")
-    return 0
+    return plot_main(list(args.args), program="spine-sim plot")
 
 
 def _handle_surface_audit(args: argparse.Namespace) -> int:
@@ -523,9 +562,22 @@ def _handle_plot_stage(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None, program: str | None = None) -> int:
-    """运行顶层命令行接口。"""
+    """运行顶层命令行接口。
+
+    ``spine-sim simulate|analyze|plot ...`` 直接把其余参数转发给对应的真实 CLI，
+    等价于 ``spine-sim-simulate`` / ``scripts/simulate.py``，避免占位实现。
+    """
+    args_list = list(sys.argv[1:] if argv is None else argv)
+    if args_list and args_list[0] in _FORWARD_COMMANDS:
+        command, rest = args_list[0], args_list[1:]
+        forward = {
+            "simulate": simulate_main,
+            "analyze": analyze_main,
+            "plot": plot_main,
+        }[command]
+        return forward(rest, program=f"spine-sim {command}")
     parser = build_parser(program=program)
-    return _run_parser(parser, argv)
+    return _run_parser(parser, args_list)
 
 
 def simulate_main(

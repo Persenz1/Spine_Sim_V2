@@ -19,6 +19,7 @@ def run(
     outdir: str | Path,
     base_seed: int = 20260616,
     overwrite: bool = False,
+    workers: int | None = None,
 ) -> SurfaceBank:
     """生成 P0/P2 共用的 surface bank 数据产品。"""
     return create_surface_bank(
@@ -32,4 +33,5 @@ def run(
         outdir=outdir,
         base_seed=base_seed,
         overwrite=overwrite,
+        workers=workers,
     )
